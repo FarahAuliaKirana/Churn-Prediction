@@ -21,7 +21,6 @@ import logging
 import sys
 from pathlib import Path
 
-import pandas as pd
 from sklearn.model_selection import train_test_split
 
 # Pastikan src/ ada di path
@@ -135,7 +134,7 @@ def main() -> None:
         _, X_test, _, y_test = train_test_split(
             X, y, test_size=0.2, stratify=y, random_state=42
         )
-        y_proba = pipeline.predict_proba(X_test)[:, 1]
+        pipeline.predict_proba(X_test)[:, 1]
         new_auc = metrics["roc_auc"]
         should_deploy = evaluate_against_baseline(
             new_auc, args.baseline_model, X_test, y_test
