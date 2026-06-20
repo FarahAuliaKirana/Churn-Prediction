@@ -1,0 +1,15 @@
+data/
+notebooks/
+*.ipynb
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+*.egg-info/
+dist/
+build/
+.env
+outputs/figures/
+outputs/shap_top_features.csv
+outputs/model_comparison_final.csv

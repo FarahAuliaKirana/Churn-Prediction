@@ -1,0 +1,30 @@
+{
+  "roc_auc": 0.8151,
+  "f1_weighted": 0.8519,
+  "cv_auc_mean": 0.8159,
+  "cv_auc_std": 0.0051,
+  "threshold": 0.47,
+  "n_train": 76876,
+  "n_test": 19220,
+  "churn_rate_train": 0.8994,
+  "feature_means_train": {
+    "avg_payment_value": 213.02,
+    "total_payment_value": 213.02,
+    "avg_installments": 2.9184,
+    "max_installments": 2.9414,
+    "avg_price": 126.1828,
+    "total_price": 126.1828,
+    "avg_freight": 20.1998,
+    "freight_ratio": 0.19,
+    "avg_review_score": 4.07,
+    "min_review_score": 3.95,
+    "review_gap": 0.01,
+    "review_count": 1.03,
+    "total_items": 1.14,
+    "total_orders": 1.03,
+    "avg_order_value": 205.45,
+    "frequency": 1.03,
+    "monetary": 213.02,
+    "customer_lifetime_days": 2.71
+  }
+}

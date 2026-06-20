@@ -1,0 +1,11 @@
+feature,mean_abs_shap
+avg_freight,0.5957175
+customer_state_SP,0.22835621
+avg_price,0.09266573
+avg_review_score,0.07397255
+freight_ratio,0.052290175
+total_price,0.043161564
+dominant_category_housewares,0.039444372
+dominant_payment_type_debit_card,0.033491895
+monetary,0.033326525
+avg_installments,0.030203205

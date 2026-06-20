@@ -1,6 +1,13 @@
-# Data files - jangan push ke GitHub (file besar)
+# Data files
 data/raw/
 data/processed/
+
+# Model artifacts
+outputs/model.pkl
+outputs/*.pkl
+outputs/*.joblib
+models/*.pkl
+models/*.joblib
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
@@ -8,8 +15,29 @@ data/processed/
 # Python cache
 __pycache__/
 *.pyc
+*.py[cod]
+*.egg-info/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Test & coverage artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Environment variables - JANGAN PERNAH PUSH
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
 
 # OS files
 .DS_Store
-Thumbs.dboutputs/model.pkl 
-outputs/model.pkl 
+Thumbs.db
+
+repomix-output.xml

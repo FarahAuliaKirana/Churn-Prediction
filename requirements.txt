@@ -1,0 +1,35 @@
+# ============================================================
+# Requirements — Churn Prediction · Olist Brazilian E-Commerce
+# ============================================================
+# Python 3.9+  |  pip install -r requirements.txt
+
+# Core ML
+pandas>=1.5.0
+numpy>=1.23.0
+scikit-learn>=1.8.0
+xgboost>=1.7.0
+shap>=0.41.0
+joblib>=1.2.0
+
+# API serving
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+pydantic>=2.0.0
+
+# Visualization 
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+httpx2>=0.1.0         # untuk FastAPI TestClient
+
+# Dev tools (opsional tapi direkomendasikan)
+black>=23.0.0
+ruff>=0.1.0
+mypy>=1.5.0
+
+# Notebooks 
+jupyter>=1.0.0
+ipykernel>=6.0.0

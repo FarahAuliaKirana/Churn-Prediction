@@ -1,0 +1,5 @@
+Model,ROC-AUC,CV AUC (mean),CV AUC (std),F1 Score
+XGBoost,0.8365,0.8334,0.0084,0.798
+Random Forest,0.8059,0.8047,0.0059,0.8774
+Decision Tree,0.7892,0.7867,0.0121,0.7432
+Logistic Regression,0.6027,0.6122,0.0078,0.6649
