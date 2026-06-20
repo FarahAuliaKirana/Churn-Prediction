@@ -15,21 +15,19 @@ from pathlib import Path
 from typing import Tuple
 
 import joblib
-import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     classification_report,
     f1_score,
     roc_auc_score,
-    roc_curve,
 )
 from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
 from xgboost import XGBClassifier
 
 # Single source of truth untuk threshold logic
-from src.models.evaluate import DEFAULT_THRESHOLD, find_optimal_threshold
+from src.models.evaluate import find_optimal_threshold
 
 logger = logging.getLogger(__name__)
 

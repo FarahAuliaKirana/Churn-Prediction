@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shap
-from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.metrics import roc_curve
 from sklearn.pipeline import Pipeline
 
 logger = logging.getLogger(__name__)

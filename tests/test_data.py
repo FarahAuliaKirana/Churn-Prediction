@@ -4,7 +4,6 @@ Unit tests untuk src/data/load.py — merge pipeline & validasi master DataFrame
 """
 import pandas as pd
 import pytest
-import numpy as np
 from unittest.mock import patch
 
 from src.data.load import (

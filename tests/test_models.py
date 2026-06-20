@@ -4,9 +4,7 @@ Unit tests untuk src/models/evaluate.py dan src/models/train.py.
 """
 import numpy as np
 import pandas as pd
-import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from sklearn.pipeline import Pipeline
 
 
@@ -36,7 +34,7 @@ class TestFindOptimalThreshold:
 
     def test_falls_back_to_default_when_recall_unachievable(self):
         """Jika recall constraint tidak bisa dipenuhi, harus return DEFAULT_THRESHOLD."""
-        from src.models.evaluate import find_optimal_threshold, DEFAULT_THRESHOLD
+        from src.models.evaluate import find_optimal_threshold
         # Semua prediksi sangat buruk — recall 99% tidak mungkin tanpa threshold 0
         y_true = pd.Series([1, 1, 1, 1, 1])
         y_proba = np.array([0.01, 0.02, 0.03, 0.04, 0.05])
@@ -67,7 +65,6 @@ class TestComputeShapValues:
 
     def test_returns_tuple_of_array_and_dataframe(self):
         from src.models.evaluate import compute_shap_values
-        import shap
 
         n, f = 50, 4
         X = pd.DataFrame(np.random.rand(n, f), columns=[f"feat_{i}" for i in range(f)])
@@ -159,7 +156,6 @@ class TestBuildPipeline:
     def test_pipeline_has_no_scaler(self):
         """XGBoost invariant terhadap scaling — StandardScaler sengaja tidak ada."""
         from src.models.train import build_pipeline
-        from sklearn.preprocessing import StandardScaler
         pipe = build_pipeline()
         step_types = [type(step).__name__ for _, step in pipe.steps]
         assert "StandardScaler" not in step_types
@@ -189,7 +185,6 @@ class TestSaveLoadModel:
 
     def test_save_creates_parent_dir(self, tmp_path):
         from src.models.train import save_model, build_pipeline
-        import numpy as np
 
         pipe = build_pipeline()
         X = pd.DataFrame({"a": [1.0, 2.0] * 10, "b": [0.5, 1.5] * 10})

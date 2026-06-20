@@ -9,7 +9,6 @@ import pytest
 from src.features.engineer import (
     LEAKY_FEATURES,
     build_features,
-    get_feature_cols,
     label_churn,
     split_X_y,
 )
