@@ -87,9 +87,10 @@ class TestBuildFeatures:
         for col in LEAKY_FEATURES:
             assert col not in sample_features.columns, f"Leaky feature '{col}' masih ada!"
 
-    def test_no_missing_values_in_numeric(self, sample_features):
-        num_cols = sample_features.select_dtypes(include="number").columns
-        assert sample_features[num_cols].isnull().sum().sum() == 0
+    def test_no_missing_values_in_target_or_rfm(self, sample_features):
+        """Target & RFM tidak boleh NaN. Fitur lain boleh NaN — diimputasi di pipeline."""
+        for col in ["is_churned", "frequency", "monetary", "total_orders"]:
+            assert sample_features[col].notna().all(), f"{col} mengandung NaN"
 
     def test_ohe_columns_exist(self, sample_features):
         """Pastikan OHE menghasilkan kolom state, payment, category."""
@@ -149,3 +150,53 @@ class TestSplitXy:
         X, _ = split_X_y(sample_features)
         non_numeric = X.select_dtypes(exclude="number").columns.tolist()
         assert len(non_numeric) == 0, f"Non-numeric columns in X: {non_numeric}"
+
+# ---------------------------------------------------------------------------
+# Tests: grain item vs order (regresi bug double-count)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def multi_item_master() -> pd.DataFrame:
+    """
+    Dua customer, grain item seperti master.csv:
+    - cust_a: 1 order berisi 3 item (payment & review berulang di tiap baris)
+    - cust_b: 2 order masing-masing 1 item
+    """
+    return pd.DataFrame({
+        "customer_unique_id": ["cust_a", "cust_a", "cust_a", "cust_b", "cust_b"],
+        "order_id":           ["o1", "o1", "o1", "o2", "o3"],
+        "order_purchase_timestamp": pd.to_datetime(
+            ["2018-01-01", "2018-01-01", "2018-01-01", "2018-02-01", "2018-08-01"]
+        ),
+        "payment_value":        [300.0, 300.0, 300.0, 100.0, 50.0],
+        "payment_installments": [3, 3, 3, 1, 1],
+        "payment_type":   ["credit_card"] * 3 + ["boleto", "boleto"],
+        "price":          [80.0, 90.0, 100.0, 90.0, 40.0],
+        "freight_value":  [10.0, 10.0, 10.0, 10.0, 10.0],
+        "review_score":   [5.0, 5.0, 5.0, 2.0, 4.0],
+        "order_item_id":  [1, 2, 3, 1, 1],
+        "customer_state": ["SP"] * 3 + ["RJ", "RJ"],
+        "product_category_name_english": ["toys"] * 5,
+    })
+
+
+class TestOrderGrain:
+    def test_monetary_not_double_counted(self, multi_item_master):
+        rfm = label_churn(multi_item_master).set_index("customer_unique_id")
+        assert rfm.loc["cust_a", "monetary"] == pytest.approx(300.0)
+        assert rfm.loc["cust_b", "monetary"] == pytest.approx(150.0)
+
+    def test_total_items_is_count_not_sum_of_item_ids(self, multi_item_master):
+        rfm = label_churn(multi_item_master)
+        feats = build_features(multi_item_master, rfm).set_index("customer_unique_id")
+        assert feats.loc["cust_a", "total_items"] == 3   # bukan 1+2+3 = 6
+        assert feats.loc["cust_b", "total_items"] == 2
+
+    def test_payment_and_review_aggregated_per_order(self, multi_item_master):
+        rfm = label_churn(multi_item_master)
+        feats = build_features(multi_item_master, rfm).set_index("customer_unique_id")
+        assert feats.loc["cust_a", "total_payment_value"] == pytest.approx(300.0)
+        assert feats.loc["cust_a", "avg_payment_value"] == pytest.approx(300.0)
+        assert feats.loc["cust_a", "review_count"] == 1   # 1 order = 1 review
+        assert feats.loc["cust_b", "review_count"] == 2
+        assert feats.loc["cust_b", "avg_order_value"] == pytest.approx(75.0)

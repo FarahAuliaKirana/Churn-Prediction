@@ -3,6 +3,13 @@ src/models/evaluate.py
 Evaluasi model: SHAP interpretability + metrik ringkas.
 Ekstrak dari notebook 04_modeling.ipynb (bagian SHAP & threshold tuning)
 
+Changelog v1.3.0:
+- find_optimal_threshold: Youden's J (bukan F1 kelas churn + recall >= 0.99,
+  yang membuat model menandai ~99% customer sebagai churn). Dipilih di
+  validation set oleh train.py.
+- Tambah threshold_report() dan ranking_report() (lift per decile, baseline
+  "semua churn").
+
 Changelog v1.2.0:
 - find_optimal_threshold dipindahkan ke sini sebagai single source of truth.
   train.py tidak lagi mendefinisikan fungsi duplikat — ia import dari sini.
@@ -22,41 +29,117 @@ from sklearn.pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_THRESHOLD = 0.470  # fallback jika threshold tidak ada di metrics.json
+DEFAULT_THRESHOLD = 0.5  # fallback jika threshold tidak ada di metrics.json
 
 
 def find_optimal_threshold(
     y_true: pd.Series,
     y_proba: np.ndarray,
-    min_churn_recall: float = 0.99,
+    min_churn_recall: float = 0.0,
 ) -> float:
     """
-    Cari threshold optimal yang memaksimalkan F1 dengan constraint
-    minimum churn recall >= `min_churn_recall`.
+    Pilih threshold yang memaksimalkan Youden's J (TPR - FPR), opsional dengan
+    constraint churn recall >= `min_churn_recall`.
 
-    Single source of truth — dipakai oleh train.py dan evaluate.py.
-    Default fallback: 0.470 dari NB04.
+    Kenapa bukan F1 kelas churn? Churn adalah kelas MAYORITAS (~90%). F1 kelas
+    mayoritas hampir selalu maksimal saat threshold sangat rendah, sehingga
+    model berakhir menandai hampir semua customer sebagai churn (lift ~1.0).
+    Youden's J menimbang kedua kelas setara, jadi model tetap membedakan.
+
+    WAJIB dipanggil dengan data validation, bukan test set.
     """
+    y_true = np.asarray(y_true).astype(int)
+    y_proba = np.asarray(y_proba, dtype=float)
+
+    if y_true.min() == y_true.max():
+        logger.warning("Hanya satu kelas di y_true — pakai DEFAULT_THRESHOLD.")
+        return float(DEFAULT_THRESHOLD)
+
     fpr, tpr, thresholds = roc_curve(y_true, y_proba)
-    best_thresh = DEFAULT_THRESHOLD
-    best_f1 = 0.0
+    valid = np.isfinite(thresholds) & (tpr >= min_churn_recall)
+    if not valid.any():
+        logger.warning("Tidak ada threshold yang memenuhi recall %.2f.", min_churn_recall)
+        return float(DEFAULT_THRESHOLD)
 
-    for thresh in thresholds:
-        y_pred = (y_proba >= thresh).astype(int)
-        tp = int(((y_pred == 1) & (y_true == 1)).sum())
-        fn = int(((y_pred == 0) & (y_true == 1)).sum())
-        fp = int(((y_pred == 1) & (y_true == 0)).sum())
-
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        prec   = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        f1     = 2 * prec * recall / (prec + recall) if (prec + recall) > 0 else 0.0
-
-        if recall >= min_churn_recall and f1 > best_f1:
-            best_f1 = f1
-            best_thresh = float(thresh)
-
-    logger.info("Optimal threshold: %.3f (F1=%.4f)", best_thresh, best_f1)
+    j = np.where(valid, tpr - fpr, -np.inf)
+    best = int(np.argmax(j))
+    best_thresh = float(np.clip(thresholds[best], 0.0, 1.0))
+    logger.info(
+        "Optimal threshold: %.4f (Youden J=%.4f, TPR=%.3f, FPR=%.3f)",
+        best_thresh, j[best], tpr[best], fpr[best],
+    )
     return best_thresh
+
+
+def threshold_report(
+    y_true: pd.Series,
+    y_proba: np.ndarray,
+    threshold: float,
+) -> dict:
+    """
+    Confusion matrix + metrik per kelas pada `threshold`, dibandingkan
+    dengan baseline naif "tandai semua customer sebagai churn".
+    """
+    y = np.asarray(y_true).astype(int)
+    pred = (np.asarray(y_proba) >= threshold).astype(int)
+
+    tp = int(((pred == 1) & (y == 1)).sum())
+    fp = int(((pred == 1) & (y == 0)).sum())
+    tn = int(((pred == 0) & (y == 0)).sum())
+    fn = int(((pred == 0) & (y == 1)).sum())
+
+    def _div(a: int, b: int) -> float:
+        return round(a / b, 4) if b else 0.0
+
+    churn_precision = _div(tp, tp + fp)
+    base_rate = round(float(y.mean()), 4)
+    return {
+        "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+        "churn_precision": churn_precision,
+        "churn_recall": _div(tp, tp + fn),
+        "non_churn_precision": _div(tn, tn + fn),
+        "non_churn_recall": _div(tn, tn + fp),
+        "flagged_rate": _div(tp + fp, len(y)),
+        # Baseline "semua churn": precision = base rate, non-churn recall = 0
+        "baseline_all_churn_precision": base_rate,
+        "churn_precision_lift": round(churn_precision / base_rate, 4) if base_rate else 0.0,
+    }
+
+
+def ranking_report(
+    y_true: pd.Series,
+    y_proba: np.ndarray,
+    top_frac: float = 0.10,
+) -> dict:
+    """
+    Metrik ranking yang tidak bergantung threshold — dipakai untuk targeting.
+
+    - Decile risiko tertinggi: churn rate vs base rate. Karena base rate churn
+      ~90%, lift maksimum yang mungkin hanya ~1.11x; angka ini wajar kecil.
+    - Decile risiko terendah: proporsi customer yang KEMBALI (non-churn) vs
+      base rate non-churn (~10%). Inilah sisi yang informatif untuk aktivasi
+      repeat purchase.
+    """
+    y = np.asarray(y_true).astype(int)
+    p = np.asarray(y_proba, dtype=float)
+    k = max(1, int(round(len(y) * top_frac)))
+    order = np.argsort(-p, kind="stable")
+
+    base_churn = float(y.mean())
+    base_return = 1.0 - base_churn
+    top_churn = float(y[order[:k]].mean())
+    bottom_return = float(1 - y[order[-k:]].mean())
+
+    return {
+        "top_frac": top_frac,
+        "base_churn_rate": round(base_churn, 4),
+        "top_decile_churn_rate": round(top_churn, 4),
+        "top_decile_churn_lift": round(top_churn / base_churn, 4) if base_churn else 0.0,
+        "max_possible_churn_lift": round(1 / base_churn, 4) if base_churn else 0.0,
+        "base_return_rate": round(base_return, 4),
+        "bottom_decile_return_rate": round(bottom_return, 4),
+        "bottom_decile_return_lift": round(bottom_return / base_return, 4) if base_return else 0.0,
+    }
 
 
 def compute_shap_values(
