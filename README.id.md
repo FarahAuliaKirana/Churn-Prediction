@@ -17,7 +17,7 @@ Proyek ini punya dua versi model:
 | ROC-AUC | 0.8207 | 0.592 rata-rata backtest (RFM LogReg) |
 | Lift | — (didominasi informasi waktu) | RFM LogReg: 6.1–6.7× di top 1%, ~2× di top 10% |
 | Status | ⚠️ Sinyal didominasi periode pembelian (uji placebo) | ✅ Signifikan mengalahkan aturan "recency saja" di 3/3 periode |
-| Dipakai API | Ya | Belum (perlu skema request baru) |
+| Dipakai API | Ya (endpoint legacy `/predict`, deprecated) | Ya — `/v2/repeat/score` (RFM LogReg) |
 
 ### v2 — Repeat Purchase (Snapshot) · `train_snapshot_pipeline.py` · NB06
 
@@ -115,7 +115,7 @@ olist-churn-prediction/
 │
 ├── src/
 │   ├── api/
-│   │   ├── main.py                   # FastAPI app & endpoints
+│   │   ├── main.py                   # FastAPI: v2 repeat scoring + v1 churn (legacy)
 │   │   └── schemas.py                # Pydantic request/response models
 │   ├── data/
 │   │   └── load.py                   # Load & merge 7 tabel Olist
@@ -280,11 +280,23 @@ docker run -p 8000:8000 -v $(pwd)/outputs:/app/outputs olist-churn-api
 
 | Method | Endpoint | Deskripsi |
 |---|---|---|
-| GET | `/health` | Status API & model |
-| POST | `/predict` | Prediksi churn 1 customer |
-| POST | `/predict/batch` | Prediksi batch hingga 1000 customer |
-| GET | `/monitoring/drift` | Mean fitur di rolling window vs baseline training |
-| GET | `/monitoring/recent` | N prediksi terakhir |
+| GET | `/health` | Status API, model v1 & v2 |
+| POST | `/v2/repeat/score` | **v2:** peluang order lagi dalam 90 hari + segmen targeting (top 1% / 5% / 10% / rest) |
+| POST | `/v2/repeat/score/batch` | **v2:** batch scoring hingga 1000 customer + jumlah per segmen |
+| POST | `/predict` | v1 (legacy, deprecated): prediksi churn 1 customer |
+| POST | `/predict/batch` | v1 (legacy, deprecated): prediksi churn hingga 1000 customer |
+| GET | `/monitoring/drift` | v1: mean fitur di rolling window vs baseline training |
+| GET | `/monitoring/recent` | v1: N prediksi terakhir |
+
+Contoh request v2 (cukup 4 fitur RFM, dihitung pada tanggal scoring):
+
+```bash
+curl -X POST http://localhost:8000/v2/repeat/score \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id": "cust_001", "recency_days": 20, "frequency": 2, "monetary": 250.0, "tenure_days": 180}'
+```
+
+Response: `repeat_probability` 0.0279, `segment` `top1pct`, `segment_lift` 6.37 (lift historis segmen ini terhadap base rate; tiap segmen dihitung per band, misalnya top 1–5% tidak termasuk top 1%). Segmen memakai batas skor dari test snapshot terbaru yang disimpan di `outputs/metrics_snapshot.json`.
 
 ---
 
@@ -415,7 +427,7 @@ Skenario ukuran dampak (gross, 1 order tambahan per customer yang kembali, rata-
 - **v1 — Label = tanggal order terakhir (kritis):** uji placebo di NB04 membuktikan fitur yang berubah seiring waktu (ongkir, metode bayar, kategori) menjadi proksi tanggal order. Sudah diatasi dengan desain snapshot di v2
 - **v2 — Sinyal lemah & sampel positif kecil:** hanya 312–618 repeater per bagian, sehingga CI bootstrap masih lebar. Backtest dibatasi 3 periode karena panjang data (order praktis berhenti akhir Agustus 2018)
 - **v2 — Bukan model uplift:** model memprediksi siapa yang kembali secara alami, bukan siapa yang terpengaruh kampanye. Alokasi voucher sebaiknya didasarkan pada A/B test + uplift modeling
-- **API masih v1:** migrasi ke model v2 membutuhkan skema request baru (`recency_days`, `tenure_days`, dll.)
+- **Monitoring v2 belum ada:** logging prediksi dan deteksi drift baru mencakup endpoint v1
 
 ---
 

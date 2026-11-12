@@ -136,3 +136,21 @@ class TestRankingMetrics:
         bad = rng.normal(0, 1, 500)
         res = bootstrap_diff(y, good, bad, n_boot=200)
         assert res["ci_low"] > 0
+
+
+class TestSegmentCutoffs:
+    def test_band_precision_is_exclusive(self):
+        from src.models.snapshot_model import segment_cutoffs
+        # 1000 customer: top 1% (10) punya 5 hits, top 5% (50) total 9 hits, top 10% (100) total 12
+        y = np.zeros(1000, dtype=int)
+        y[:5] = 1
+        y[10:14] = 1
+        y[50:53] = 1
+        score = np.linspace(1, 0, 1000)
+        segs = segment_cutoffs(score, ranking_metrics(y, score))
+        assert [s["segment"] for s in segs] == ["top1pct", "top5pct", "top10pct"]
+        assert segs[0]["precision"] == pytest.approx(5 / 10)
+        assert segs[1]["precision"] == pytest.approx(4 / 40)   # peringkat 1–5% saja
+        assert segs[2]["precision"] == pytest.approx(3 / 50)   # peringkat 5–10% saja
+        assert segs[1]["cumulative_precision"] == pytest.approx(9 / 50)
+        assert segs[0]["min_score"] > segs[1]["min_score"] > segs[2]["min_score"]

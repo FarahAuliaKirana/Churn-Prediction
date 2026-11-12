@@ -1,0 +1,12 @@
+# Tema dashboard: dasar netral terang, satu aksen (teal) untuk angka & aksi utama.
+# Pengguna tetap bisa beralih ke dark mode lewat menu Settings di Streamlit.
+[theme]
+base = "light"
+primaryColor = "#0F766E"
+backgroundColor = "#FAFAF7"
+secondaryBackgroundColor = "#EEF0EA"
+textColor = "#1F2933"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

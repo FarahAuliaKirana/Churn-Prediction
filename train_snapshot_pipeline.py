@@ -47,6 +47,8 @@ from src.models.snapshot_model import train_and_evaluate  # noqa: E402
 TRAIN_CUTOFFS = ["2017-06-01", "2017-09-01", "2017-12-01"]
 VAL_CUTOFF = "2018-03-01"
 TEST_CUTOFF = "2018-06-01"
+DEMO_SAMPLE_SIZE = 5000
+DEMO_FILE = "demo_customers_2018-06.csv"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,7 +83,17 @@ def main() -> None:
         joblib.dump(model, out / f"model_snapshot_{name}.pkl")
     with open(out / "metrics_snapshot.json", "w") as f:
         json.dump(metrics, f, indent=2)
-    logger.info("Disimpan: %s", [f"model_snapshot_{n}.pkl" for n in models] + ["metrics_snapshot.json"])
+
+    # Sampel customer asli dari test snapshot (belum pernah dilihat model) untuk mode demo
+    # dashboard. Hanya fitur RFM + hasil aktual; customer_unique_id Olist sudah anonim.
+    demo = test_df.sample(n=min(DEMO_SAMPLE_SIZE, len(test_df)), random_state=42)
+    demo = demo.rename(columns={"customer_unique_id": "customer_id",
+                                "is_repeat": "ordered_again_90d"})
+    demo[["customer_id", "recency_days", "frequency", "monetary", "tenure_days",
+          "ordered_again_90d"]].to_csv(out / DEMO_FILE, index=False)
+
+    logger.info("Disimpan: %s", [f"model_snapshot_{n}.pkl" for n in models]
+                + ["metrics_snapshot.json", DEMO_FILE])
 
     if args.backtest:
         snapshots = build_snapshot_cache(master, QUARTERLY_CUTOFFS, reviews=reviews)

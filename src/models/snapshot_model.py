@@ -156,6 +156,42 @@ def bootstrap_diff(
     }
 
 
+def segment_cutoffs(
+    score: Sequence[float],
+    metrics: dict,
+    fracs: Sequence[float] = TOP_FRACS,
+) -> list[dict]:
+    """
+    Batas skor untuk segmen top-k% di test snapshot terbaru, beserta precision & lift
+    historisnya. Dipakai API untuk menerjemahkan probabilitas menjadi segmen targeting.
+    Diurutkan dari segmen paling sempit (top 1%) ke paling lebar.
+
+    Segmen bersifat EKSKLUSIF (top5pct = peringkat 1–5%, tanpa top 1%), sesuai cara API
+    menempatkan customer. Karena itu precision & lift dihitung per band, bukan kumulatif:
+    precision band = (hits top-k − hits top-k sebelumnya) / (n top-k − n top-k sebelumnya).
+    """
+    s = np.asarray(score, dtype=float)
+    n = len(s)
+    base = metrics["base_rate"]
+    out = []
+    prev_k, prev_hits = 0, 0.0
+    for f in sorted(fracs):
+        key = f"top{int(round(f * 100))}pct"
+        k = max(1, int(round(n * f)))
+        hits = metrics[f"precision_{key}"] * k
+        band_precision = (hits - prev_hits) / (k - prev_k) if k > prev_k else 0.0
+        out.append({
+            "segment": key,
+            "min_score": round(float(np.quantile(s, 1 - f)), 6),
+            "precision": round(float(band_precision), 4),
+            "lift": round(float(band_precision / base), 2) if base else 0.0,
+            "cumulative_precision": metrics[f"precision_{key}"],
+            "cumulative_lift": metrics[f"lift_{key}"],
+        })
+        prev_k, prev_hits = k, hits
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
@@ -237,6 +273,15 @@ def train_and_evaluate(
         "validation_grid": grid.round(4).to_dict(orient="records"),
         "test": test_metrics,
         "significance": significance,
+        "segments": {
+            name: segment_cutoffs(scores[name], test_metrics[name])
+            for name in ("rfm_logreg", "xgboost")
+        },
+        # Koefisien LogReg pada fitur log1p + standardisasi (arah & besar pengaruh)
+        "rfm_logreg_coefficients": {
+            f"log_{f}": round(float(c), 4)
+            for f, c in zip(RFM_FEATURES, rfm.named_steps["model"].coef_[0])
+        },
     }
     for name, m in test_metrics.items():
         logger.info("%-13s ROC-AUC %.4f | PR-AUC %.4f | lift@10%% %.2f",

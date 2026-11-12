@@ -2,6 +2,11 @@
 src/api/schemas.py
 Pydantic models untuk FastAPI request & response.
 
+Changelog v2.0.0:
+- Tambah schema v2 (repeat purchase, snapshot design): RepeatRequest,
+  RepeatResponse, BatchRepeatRequest, BatchRepeatResponse.
+- HealthResponse expose status model v2.
+
 Changelog v1.2.0:
 - DriftStats diperluas: tambah drift_flags dan flagged_features
   untuk support endpoint /monitoring/drift yang sekarang aktif.
@@ -25,40 +30,40 @@ class ChurnRequest(BaseModel):
     API menghitungnya server-side dari monetary dan frequency untuk
     menjamin konsistensi (mencegah client kirim nilai yang kontradiktif).
     """
-    customer_id: Optional[str] = Field(None, description="Customer ID untuk tracking")
+    customer_id: Optional[str] = Field(None, description="Customer ID for tracking")
 
     # Payment features
-    avg_payment_value:   float = Field(..., ge=0, description="Rata-rata nilai pembayaran per order (BRL)")
-    total_payment_value: float = Field(..., ge=0, description="Total nilai pembayaran semua order (BRL)")
-    avg_installments:    float = Field(..., ge=1, description="Rata-rata jumlah cicilan")
-    max_installments:    int   = Field(..., ge=1, description="Cicilan terbanyak dalam satu order")
+    avg_payment_value:   float = Field(..., ge=0, description="Average payment per order (BRL)")
+    total_payment_value: float = Field(..., ge=0, description="Total payment across all orders (BRL)")
+    avg_installments:    float = Field(..., ge=1, description="Average number of installments")
+    max_installments:    int   = Field(..., ge=1, description="Most installments in a single order")
 
     # Price & freight features
-    avg_price:     float = Field(..., ge=0, description="Rata-rata harga produk (BRL)")
-    total_price:   float = Field(..., ge=0, description="Total harga produk (BRL)")
-    avg_freight:   float = Field(..., ge=0, description="Rata-rata ongkos kirim (BRL)")
-    freight_ratio: float = Field(..., ge=0, le=2, description="Ongkir sebagai proporsi dari avg payment")
+    avg_price:     float = Field(..., ge=0, description="Average product price (BRL)")
+    total_price:   float = Field(..., ge=0, description="Total product price (BRL)")
+    avg_freight:   float = Field(..., ge=0, description="Average shipping cost (BRL)")
+    freight_ratio: float = Field(..., ge=0, le=2, description="Shipping cost as a share of the average payment")
 
     # Review features
-    avg_review_score: float = Field(..., ge=1, le=5, description="Rata-rata skor review (1–5)")
-    min_review_score: float = Field(..., ge=1, le=5, description="Skor review terendah")
-    review_gap:       float = Field(..., ge=0, description="avg_review - min_review (proxy konsistensi)")
-    review_count:     int   = Field(..., ge=0, description="Jumlah review yang diberikan")
+    avg_review_score: float = Field(..., ge=1, le=5, description="Average review score (1–5)")
+    min_review_score: float = Field(..., ge=1, le=5, description="Lowest review score")
+    review_gap:       float = Field(..., ge=0, description="avg_review - min_review (consistency proxy)")
+    review_count:     int   = Field(..., ge=0, description="Number of reviews given")
 
     # Order behaviour
-    total_items:     int   = Field(..., ge=1, description="Total item yang dibeli")
-    total_orders:    int   = Field(..., ge=1, description="Total order yang dilakukan")
-    avg_order_value: float = Field(..., ge=0, description="Rata-rata nilai per order (BRL)")
+    total_items:     int   = Field(..., ge=1, description="Total items purchased")
+    total_orders:    int   = Field(..., ge=1, description="Total orders placed")
+    avg_order_value: float = Field(..., ge=0, description="Average order value (BRL)")
 
     # Temporal / derived
-    frequency:              int   = Field(..., ge=1, description="Jumlah order unik")
-    monetary:               float = Field(..., ge=0, description="Total pembayaran (BRL)")
-    customer_lifetime_days: int   = Field(..., ge=0, description="Hari dari order pertama ke terakhir")
+    frequency:              int   = Field(..., ge=1, description="Number of distinct orders")
+    monetary:               float = Field(..., ge=0, description="Total payment (BRL)")
+    customer_lifetime_days: int   = Field(..., ge=0, description="Days from first to last order")
 
     # Categorical (API handle OHE secara internal)
-    customer_state:        str = Field(..., description="Kode state (e.g. 'SP', 'RJ')")
-    dominant_payment_type: str = Field(..., description="Metode pembayaran dominan")
-    dominant_category:     str = Field(..., description="Kategori produk dominan")
+    customer_state:        str = Field(..., description="State code (e.g. 'SP', 'RJ')")
+    dominant_payment_type: str = Field(..., description="Most used payment method")
+    dominant_category:     str = Field(..., description="Most purchased product category")
 
     @model_validator(mode="after")
     def check_review_gap(self) -> "ChurnRequest":
@@ -66,7 +71,7 @@ class ChurnRequest(BaseModel):
         expected = round(self.avg_review_score - self.min_review_score, 4)
         if abs(self.review_gap - expected) > 0.1:
             raise ValueError(
-                f"review_gap ({self.review_gap}) tidak sesuai dengan "
+                f"review_gap ({self.review_gap}) does not match "
                 f"avg_review_score - min_review_score ({expected})"
             )
         return self
@@ -127,6 +132,74 @@ class HealthResponse(BaseModel):
     model_loaded:  bool
     model_version: Optional[str]
     threshold:     Optional[float] = None  # threshold aktif dari metrics.json
+    repeat_model_loaded:  bool = False     # model v2 (repeat purchase)
+    repeat_model_version: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# v2 — Repeat purchase (snapshot design, RFM Logistic Regression)
+# ---------------------------------------------------------------------------
+
+RepeatSegment = Literal["top1pct", "top5pct", "top10pct", "rest"]
+
+
+class RepeatRequest(BaseModel):
+    """
+    Input model v2: empat fitur RFM yang dihitung pada tanggal scoring
+    (semua dari order SEBELUM tanggal scoring).
+    """
+    customer_id:  Optional[str] = Field(None, description="Customer ID for tracking")
+    recency_days: int   = Field(..., ge=0, description="Days since the last order")
+    frequency:    int   = Field(..., ge=1, description="Number of distinct orders")
+    monetary:     float = Field(..., ge=0, description="Total paid across all orders (BRL)")
+    tenure_days:  int   = Field(..., ge=0, description="Days since the first order")
+
+    @model_validator(mode="after")
+    def check_tenure(self) -> "RepeatRequest":
+        """Order pertama tidak mungkin lebih baru dari order terakhir."""
+        if self.tenure_days < self.recency_days:
+            raise ValueError(
+                f"tenure_days ({self.tenure_days}) must be >= recency_days ({self.recency_days})"
+            )
+        if self.frequency == 1 and self.tenure_days != self.recency_days:
+            raise ValueError("A customer with 1 order must have tenure_days == recency_days")
+        return self
+
+    model_config = {"json_schema_extra": {
+        "example": {
+            "customer_id": "cust_001",
+            "recency_days": 20,
+            "frequency": 2,
+            "monetary": 250.0,
+            "tenure_days": 180,
+        }
+    }}
+
+
+class RepeatResponse(BaseModel):
+    """Hasil scoring repeat purchase untuk satu customer."""
+    customer_id:       Optional[str] = None
+    repeat_probability: float = Field(..., ge=0, le=1,
+                                      description="Chance of ordering again within 90 days")
+    segment:           RepeatSegment = Field(
+        ..., description="Targeting segment from score cut-offs in the latest test snapshot")
+    segment_lift:      Optional[float] = Field(
+        None, description="Historical lift of this segment over the base rate (None for 'rest')")
+    segment_precision: Optional[float] = Field(
+        None, description="Historical repeat rate of this segment (None for 'rest')")
+    model_version:     str
+
+
+class BatchRepeatRequest(BaseModel):
+    """Batch scoring repeat purchase."""
+    customers: list[RepeatRequest] = Field(..., min_length=1, max_length=1000)
+
+
+class BatchRepeatResponse(BaseModel):
+    """Hasil batch scoring repeat purchase."""
+    predictions:    list[RepeatResponse]
+    total:          int
+    segment_counts: dict[str, int]
 
 
 class DriftStats(BaseModel):

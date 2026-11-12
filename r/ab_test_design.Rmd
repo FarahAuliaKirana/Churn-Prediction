@@ -258,6 +258,24 @@ knitr::kable(be, align = "lr")
 
 Pesan utama untuk stakeholder: **eksperimen ini layak dijalankan, tetapi hanya untuk menguji efek yang besar.** Desain insentif (besaran diskon, jenis insentif) sama pentingnya dengan desain eksperimen — voucher 15% di repeat rate ~1% kemungkinan besar merugi meskipun "berhasil" menaikkan repeat purchase.
 
+```{r export, include = FALSE}
+# Data ringkas untuk dashboard Streamlit (dibaca oleh streamlit_app.py)
+km_all <- summary(km, times = 0:365, extend = TRUE)
+write.csv(data.frame(days = km_all$time,
+                     repeat_rate = round(1 - km_all$surv, 6),
+                     ci_low  = round(1 - km_all$upper, 6),
+                     ci_high = round(1 - km_all$lower, 6)),
+          "km_curve.csv", row.names = FALSE)
+write.csv(data.frame(
+  key   = c("repeat_rate_90d", "n_total_for_20pct_lift", "months_for_20pct_lift",
+            "mde_relative_3_months", "monthly_new_customers", "same_day_share"),
+  value = c(round(p90, 6), 2 * ceiling(pwr.2p.test(h = ES.h(p90 * 1.2, p90), sig.level = 0.05,
+                                                   power = 0.80)$n),
+            power_table$bulan_rekrutmen[2], round(p2_3m / p90 - 1, 4), monthly_new,
+            round(mean(d$same_day[!is.na(d$gap_days)]), 4))
+), "ab_summary.csv", row.names = FALSE)
+```
+
 ---
 
 *Session info: `r R.version.string`; survival `r packageVersion("survival")`; pwr `r packageVersion("pwr")`.*

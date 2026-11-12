@@ -322,6 +322,8 @@ knitr::kable(be, align = "lr")
 
 Pesan utama untuk stakeholder: **eksperimen ini layak dijalankan, tetapi hanya untuk menguji efek yang besar.** Desain insentif (besaran diskon, jenis insentif) sama pentingnya dengan desain eksperimen — voucher 15% di repeat rate ~1% kemungkinan besar merugi meskipun "berhasil" menaikkan repeat purchase.
 
+
+
 ---
 
 *Session info: R version 4.6.2 (2026-10-29 ucrt); survival 3.8.12; pwr 1.3.0.*

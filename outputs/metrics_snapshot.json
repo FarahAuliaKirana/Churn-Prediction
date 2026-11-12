@@ -122,5 +122,65 @@
       "p_value_one_sided": 0.462,
       "n_boot": 500
     }
+  },
+  "segments": {
+    "rfm_logreg": [
+      {
+        "segment": "top1pct",
+        "min_score": 0.023281,
+        "precision": 0.036,
+        "lift": 6.37,
+        "cumulative_precision": 0.036,
+        "cumulative_lift": 6.36
+      },
+      {
+        "segment": "top5pct",
+        "min_score": 0.010253,
+        "precision": 0.0109,
+        "lift": 1.92,
+        "cumulative_precision": 0.0159,
+        "cumulative_lift": 2.82
+      },
+      {
+        "segment": "top10pct",
+        "min_score": 0.008759,
+        "precision": 0.0095,
+        "lift": 1.68,
+        "cumulative_precision": 0.0127,
+        "cumulative_lift": 2.25
+      }
+    ],
+    "xgboost": [
+      {
+        "segment": "top1pct",
+        "min_score": 0.022023,
+        "precision": 0.0386,
+        "lift": 6.83,
+        "cumulative_precision": 0.0386,
+        "cumulative_lift": 6.82
+      },
+      {
+        "segment": "top5pct",
+        "min_score": 0.012957,
+        "precision": 0.0139,
+        "lift": 2.45,
+        "cumulative_precision": 0.0188,
+        "cumulative_lift": 3.32
+      },
+      {
+        "segment": "top10pct",
+        "min_score": 0.010759,
+        "precision": 0.01,
+        "lift": 1.77,
+        "cumulative_precision": 0.0144,
+        "cumulative_lift": 2.55
+      }
+    ]
+  },
+  "rfm_logreg_coefficients": {
+    "log_recency_days": -0.1657,
+    "log_frequency": 0.2291,
+    "log_monetary": -0.0211,
+    "log_tenure_days": -0.0589
   }
 }

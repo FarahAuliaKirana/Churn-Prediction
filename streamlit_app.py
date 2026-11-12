@@ -1,481 +1,620 @@
 """
 streamlit_app.py
-Dashboard Streamlit untuk Churn Prediction API.
-Taruh file ini di root folder proyek (sejajar dengan src/ dan tests/).
+Dashboard untuk model repeat purchase (v2).
 
-Jalankan lokal:
+Halaman:
+    Overview              — cerita project, bukti validasi, rekomendasi, grafik pendukung
+    Score a customer      — peluang satu customer belanja lagi dalam 90 hari + contoh siap klik
+    Score a customer list — data demo (customer asli Jun 2018) atau upload CSV → daftar prioritas
+
+Jalankan lokal (API harus berjalan untuk halaman scoring):
+    uvicorn src.api.main:app --reload
     streamlit run streamlit_app.py
 
-Deploy ke Streamlit Cloud / HuggingFace Spaces — set environment variable:
-    API_URL=https://your-api.onrender.com
-
-Default fallback: http://127.0.0.1:8000 (local dev)
+Target API bisa diganti dengan env var API_URL (default http://127.0.0.1:8000).
+Halaman Overview tidak butuh API: datanya dibaca dari outputs/ dan r/.
+Halaman bisa dibuka langsung lewat URL: ?page=overview | score | list
 """
+from __future__ import annotations
 
-import math
+import json
 import os
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
 
-# ── API URL — satu baris, bisa di-override tanpa edit file ───────────────────
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
+ROOT = Path(__file__).parent
+REPO_URL = "https://github.com/FarahAuliaKirana/Churn-Prediction"
 
-# ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Churn Prediction Dashboard",
-    page_icon="📉",
-    layout="wide",
-)
+ACCENT = "#0F766E"
+INK = "#1F2933"
+MUTED = "#52606D"
+SOFT = "#B8C2CC"
+MODEL_COLORS = {"RFM logistic regression": ACCENT, "XGBoost": MUTED, "Recency-only rule": SOFT}
+MODEL_LABELS = {"rfm_logreg": "RFM logistic regression", "xgboost": "XGBoost",
+                "recency_rule": "Recency-only rule"}
+SEGMENT_ORDER = ["top1pct", "top5pct", "top10pct", "rest"]
+# Segmen API bersifat eksklusif: top5pct = peringkat 1–5% (tidak termasuk top 1%), dst.
+SEGMENT_TEXT = {"top1pct": "Top 1%", "top5pct": "Top 1–5%", "top10pct": "Top 5–10%",
+                "rest": "Below the top 10%"}
+PERIOD_LABELS = {"2017-12-01": "Dec 2017", "2018-03-01": "Mar 2018", "2018-06-01": "Jun 2018"}
+PAGES = {"overview": "Overview", "score": "Score a customer", "list": "Score a customer list"}
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
-st.markdown("""
+# Contoh customer realistis (rentang nilai umum di data Olist) untuk halaman Score
+EXAMPLES = {
+    "Loyal repeat buyer":     {"frequency": 3, "recency": 25,  "tenure": 300, "monetary": 450.0},
+    "Recent one-time buyer":  {"frequency": 1, "recency": 10,  "tenure": 10,  "monetary": 120.0},
+    "Dormant one-time buyer": {"frequency": 1, "recency": 250, "tenure": 250, "monetary": 90.0},
+}
+
+st.set_page_config(page_title="Olist Repeat Purchase", layout="wide")
+
+st.markdown(f"""
 <style>
-    [data-testid="stSidebar"] { background-color: #0f1117; }
-    .metric-card {
-        background: #1e2130;
-        border-radius: 12px;
-        padding: 1.2rem 1.5rem;
-        border-left: 4px solid #4f8ef7;
-        margin-bottom: 0.5rem;
-    }
-    .metric-card.danger  { border-left-color: #e05252; }
-    .metric-card.success { border-left-color: #52c97a; }
-    .metric-card.warning { border-left-color: #f5a623; }
-    .metric-label { color: #8b92a5; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
-    .metric-value { color: #f0f2f6; font-size: 2rem; font-weight: 700; }
-    .metric-sub   { color: #8b92a5; font-size: 0.8rem; margin-top: 2px; }
-    .status-ok    { color: #52c97a; font-weight: 600; }
-    .status-err   { color: #e05252; font-weight: 600; }
-    .section-title {
-        font-size: 1.05rem; font-weight: 600; color: #c8cdd8;
-        margin: 1.2rem 0 0.6rem;
-        border-bottom: 1px solid #2a2f45; padding-bottom: 6px;
-    }
+    .block-container {{ padding-top: 2.2rem; max-width: 1180px; }}
+    h1 {{ font-weight: 700; letter-spacing: -0.01em; }}
+    .lede {{ font-size: 1.08rem; color: {MUTED}; max-width: 780px; margin-top: -0.4rem; }}
+    .kpi {{ border: 1px solid #E3E5DE; border-radius: 8px; padding: 1rem 1.1rem; background: #FFFFFF;
+            height: 100%; }}
+    .kpi-value {{ font-size: 2.1rem; font-weight: 700; color: {INK}; line-height: 1.1; }}
+    .kpi-value.accent {{ color: {ACCENT}; }}
+    .kpi-text {{ color: {MUTED}; font-size: 0.95rem; margin-top: 0.35rem; }}
+    .proof {{ border-left: 3px solid {ACCENT}; padding: 0.6rem 0 0.6rem 1rem; margin: 1.2rem 0 0.4rem;
+              font-size: 1.05rem; color: {INK}; }}
+    .rec {{ border: 1px solid #E3E5DE; border-radius: 8px; padding: 0.9rem 1rem; background: #FFFFFF;
+            height: 100%; }}
+    .rec-title {{ font-weight: 600; color: {INK}; margin-bottom: 0.3rem; }}
+    .rec-text {{ color: {MUTED}; font-size: 0.93rem; }}
+    .result {{ border: 1px solid #E3E5DE; border-radius: 8px; padding: 1.2rem 1.3rem; background: #FFFFFF; }}
+    .result-big {{ font-size: 2.6rem; font-weight: 700; color: {ACCENT}; line-height: 1.05; }}
+    .result-line {{ font-size: 1.05rem; color: {INK}; margin-top: 0.5rem; }}
+    .note {{ color: {MUTED}; font-size: 0.9rem; }}
+    .footer {{ color: {MUTED}; font-size: 0.88rem; border-top: 1px solid #E3E5DE;
+               padding-top: 0.8rem; margin-top: 2rem; }}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Helper: health check (cached 10 detik) ───────────────────────────────────
+# ---------------------------------------------------------------------------
+# Data — semua dari file output project
+# ---------------------------------------------------------------------------
+
+@st.cache_data
+def load_backtest() -> pd.DataFrame | None:
+    fp = ROOT / "outputs" / "backtest_snapshot.csv"
+    return pd.read_csv(fp) if fp.exists() else None
+
+
+@st.cache_data
+def load_snapshot_metrics() -> dict | None:
+    fp = ROOT / "outputs" / "metrics_snapshot.json"
+    return json.loads(fp.read_text()) if fp.exists() else None
+
+
+@st.cache_data
+def load_km_curve() -> pd.DataFrame | None:
+    fp = ROOT / "r" / "km_curve.csv"
+    return pd.read_csv(fp) if fp.exists() else None
+
+
+@st.cache_data
+def load_ab_summary() -> dict | None:
+    fp = ROOT / "r" / "ab_summary.csv"
+    if not fp.exists():
+        return None
+    df = pd.read_csv(fp)
+    return dict(zip(df["key"], df["value"]))
+
+
+@st.cache_data
+def load_demo_customers() -> pd.DataFrame | None:
+    fp = ROOT / "outputs" / "demo_customers_2018-06.csv"
+    return pd.read_csv(fp) if fp.exists() else None
+
+
+# ---------------------------------------------------------------------------
+# API helpers
+# ---------------------------------------------------------------------------
+
 @st.cache_data(ttl=10)
-def get_health():
+def get_health() -> dict | None:
     try:
         return requests.get(f"{API_URL}/health", timeout=3).json()
-    except Exception:
+    except requests.RequestException:
         return None
 
 
-# ── Helper: build payload dari form values ────────────────────────────────────
-def build_payload(
-    customer_id, avg_payment_value, total_payment_value,
-    avg_installments, max_installments, avg_price, total_price,
-    avg_freight, freight_ratio, avg_review_score, min_review_score,
-    review_count, total_items, total_orders, avg_order_value,
-    frequency, monetary, customer_lifetime_days,
-    customer_state, dominant_payment_type, dominant_category,
-):
-    min_review_score = min(float(min_review_score), float(avg_review_score))
-    review_gap = round(float(avg_review_score) - min_review_score, 4)
-
-    return {
-        "customer_id":           customer_id or None,
-        "avg_payment_value":     float(avg_payment_value),
-        "total_payment_value":   float(total_payment_value),
-        "avg_installments":      float(avg_installments),
-        "max_installments":      int(max_installments),
-        "avg_price":             float(avg_price),
-        "total_price":           float(total_price),
-        "avg_freight":           float(avg_freight),
-        "freight_ratio":         float(freight_ratio),
-        "avg_review_score":      float(avg_review_score),
-        "min_review_score":      min_review_score,
-        "review_gap":            review_gap,
-        "review_count":          int(review_count),
-        "total_items":           int(total_items),
-        "total_orders":          int(total_orders),
-        "avg_order_value":       float(avg_order_value),
-        "frequency":             int(frequency),
-        "monetary":              float(monetary),
-        "customer_lifetime_days": int(customer_lifetime_days),
-        "customer_state":        customer_state,
-        "dominant_payment_type": dominant_payment_type,
-        "dominant_category":     dominant_category,
-    }
-
-
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 📉 Churn Prediction")
-    st.markdown("---")
-
-    health = get_health()
-    if health:
-        st.markdown('<span class="status-ok">● API Online</span>', unsafe_allow_html=True)
-        st.caption(f"Model v{health.get('model_version','–')} · Threshold {health.get('threshold','–')}")
-    else:
-        st.markdown('<span class="status-err">● API Offline</span>', unsafe_allow_html=True)
-        st.caption(f"Target: `{API_URL}`")
-        st.caption("Set env var `API_URL` untuk mengubah target.")
-
-    st.markdown("---")
-    page = st.radio("Navigasi", ["🔍 Prediksi Single", "📦 Prediksi Batch (CSV)", "📊 Monitoring"])
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 1 — Single Predict
-# ═══════════════════════════════════════════════════════════════════════════════
-if page == "🔍 Prediksi Single":
-    st.title("🔍 Prediksi Satu Customer")
-    st.caption("Isi data customer di bawah, lalu klik **Prediksi**.")
-
-    with st.form("single_form"):
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            st.markdown('<div class="section-title">💳 Payment</div>', unsafe_allow_html=True)
-            avg_payment_value     = st.number_input("Avg Payment Value (BRL)", min_value=0.0, value=150.0, step=10.0)
-            total_payment_value   = st.number_input("Total Payment Value (BRL)", min_value=0.0, value=150.0, step=10.0)
-            avg_installments      = st.number_input("Avg Installments", min_value=1.0, value=3.0, step=1.0)
-            max_installments      = st.number_input("Max Installments", min_value=1, value=3, step=1)
-            dominant_payment_type = st.selectbox(
-                "Payment Type",
-                ["credit_card", "boleto", "debit_card", "voucher", "not_defined", "unknown"]
-            )
-
-        with c2:
-            st.markdown('<div class="section-title">📦 Order & Produk</div>', unsafe_allow_html=True)
-            avg_price       = st.number_input("Avg Price (BRL)", min_value=0.0, value=120.0, step=10.0)
-            total_price     = st.number_input("Total Price (BRL)", min_value=0.0, value=120.0, step=10.0)
-            avg_freight     = st.number_input("Avg Freight (BRL)", min_value=0.0, value=30.0, step=5.0)
-            freight_ratio   = st.number_input("Freight Ratio", min_value=0.0, max_value=2.0, value=0.2, step=0.05)
-            total_items     = st.number_input("Total Items", min_value=1, value=1, step=1)
-            total_orders    = st.number_input("Total Orders", min_value=1, value=1, step=1)
-            avg_order_value = st.number_input("Avg Order Value (BRL)", min_value=0.0, value=150.0, step=10.0)
-            dominant_category = st.selectbox(
-                "Kategori Dominan",
-                ["health_beauty", "bed_bath_table", "sports_leisure", "furniture_decor",
-                 "computers_accessories", "housewares", "telephony", "toys",
-                 "watches_gifts", "auto", "other"]
-            )
-
-        with c3:
-            st.markdown('<div class="section-title">⭐ Review & Lainnya</div>', unsafe_allow_html=True)
-
-            avg_review_score = st.number_input(
-                "Avg Review Score (1–5)", min_value=1.0, max_value=5.0, value=4.0, step=0.1
-            )
-            min_review_score = st.number_input(
-                "Min Review Score (1–5)", min_value=1.0, max_value=5.0, value=4.0, step=0.1
-            )
-            min_review_clamped = min(float(min_review_score), float(avg_review_score))
-            review_gap_preview = round(float(avg_review_score) - min_review_clamped, 4)
-            st.caption(f"Review Gap (auto-hitung): **{review_gap_preview}**")
-            if min_review_score > avg_review_score:
-                st.warning("⚠️ Min Review Score lebih besar dari Avg — akan otomatis di-clamp ke Avg saat prediksi.")
-
-            review_count           = st.number_input("Review Count", min_value=0, value=1, step=1)
-            frequency              = st.number_input("Frequency (order unik)", min_value=1, value=1, step=1)
-            monetary               = st.number_input("Monetary (BRL)", min_value=0.0, value=150.0, step=10.0)
-            customer_lifetime_days = st.number_input("Customer Lifetime (hari)", min_value=0, value=0, step=30)
-            customer_id            = st.text_input("Customer ID (opsional)", value="cust_001")
-            customer_state         = st.selectbox(
-                "State",
-                ["SP","RJ","MG","BA","PR","RS","PE","CE","GO","PA",
-                 "SC","MA","ES","PB","PI","RN","AL","MT","MS","DF",
-                 "SE","AM","RO","AC","TO","AP","RR"]
-            )
-
-        submitted = st.form_submit_button("🚀 Prediksi", use_container_width=True)
-
-    if submitted:
-        payload = build_payload(
-            customer_id, avg_payment_value, total_payment_value,
-            avg_installments, max_installments, avg_price, total_price,
-            avg_freight, freight_ratio, avg_review_score, min_review_score,
-            review_count, total_items, total_orders, avg_order_value,
-            frequency, monetary, customer_lifetime_days,
-            customer_state, dominant_payment_type, dominant_category,
-        )
-        try:
-            r = requests.post(f"{API_URL}/predict", json=payload, timeout=10)
-            r.raise_for_status()
-            resp     = r.json()
-            prob     = resp["churn_probability"]
-            is_churn = resp["is_churn"]
-
-            st.markdown("---")
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                card_class = "danger" if is_churn else "success"
-                label      = "🔴 CHURN" if is_churn else "🟢 RETAINED"
-                st.markdown(f"""
-                <div class="metric-card {card_class}">
-                    <div class="metric-label">Status</div>
-                    <div class="metric-value">{label}</div>
-                    <div class="metric-sub">Threshold {resp['threshold_used']}</div>
-                </div>""", unsafe_allow_html=True)
-            with col_b:
-                thr = resp["threshold_used"]
-                prob_class = "danger" if prob >= thr else "warning" if prob >= thr - 0.1 else "success"
-                st.markdown(f"""
-                <div class="metric-card {prob_class}">
-                    <div class="metric-label">Churn Probability</div>
-                    <div class="metric-value">{prob*100:.1f}%</div>
-                    <div class="metric-sub">Model v{resp['model_version']}</div>
-                </div>""", unsafe_allow_html=True)
-            with col_c:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">Customer ID</div>
-                    <div class="metric-value" style="font-size:1.2rem">{resp.get('customer_id') or '—'}</div>
-                    <div class="metric-sub">XGBoost</div>
-                </div>""", unsafe_allow_html=True)
-
-            st.markdown("##### Churn Probability")
-            st.progress(float(prob))
-
-        except requests.HTTPError as e:
-            try:
-                detail = e.response.json()
-                st.error(f"API Error {e.response.status_code}: {detail}")
-            except Exception:
-                st.error(f"API Error: {e}")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 2 — Batch CSV
-# ═══════════════════════════════════════════════════════════════════════════════
-elif page == "📦 Prediksi Batch (CSV)":
-    st.title("📦 Prediksi Batch dari CSV")
-    st.caption("Upload CSV dengan kolom sesuai skema API. Bisa ribuan baris — diproses per 1000.")
-
-    sample_data = [
-        {
-            "customer_id": "cust_001", "avg_payment_value": 150, "total_payment_value": 150,
-            "avg_installments": 3, "max_installments": 3, "avg_price": 120, "total_price": 120,
-            "avg_freight": 30, "freight_ratio": 0.2, "avg_review_score": 4, "min_review_score": 4,
-            "review_gap": 0, "review_count": 1, "total_items": 1, "total_orders": 1,
-            "avg_order_value": 150, "frequency": 1, "monetary": 150, "customer_lifetime_days": 0,
-            "customer_state": "SP", "dominant_payment_type": "credit_card", "dominant_category": "health_beauty"
-        },
-        {
-            "customer_id": "cust_002", "avg_payment_value": 80, "total_payment_value": 240,
-            "avg_installments": 1, "max_installments": 1, "avg_price": 60, "total_price": 180,
-            "avg_freight": 20, "freight_ratio": 0.25, "avg_review_score": 3, "min_review_score": 2,
-            "review_gap": 1, "review_count": 3, "total_items": 3, "total_orders": 3,
-            "avg_order_value": 80, "frequency": 3, "monetary": 240, "customer_lifetime_days": 180,
-            "customer_state": "RJ", "dominant_payment_type": "boleto", "dominant_category": "sports_leisure"
-        },
-    ]
-    template_df = pd.DataFrame(sample_data)
-    st.download_button(
-        "⬇️ Download Template CSV",
-        template_df.to_csv(index=False).encode(),
-        "template_churn.csv",
-        "text/csv",
+def api_offline_message() -> None:
+    st.error(
+        f"The scoring API is not reachable at `{API_URL}`. Start it with "
+        "`uvicorn src.api.main:app --reload`, or set `API_URL` to where it runs."
     )
 
-    st.markdown("---")
-    uploaded = st.file_uploader("Upload CSV kamu", type=["csv"])
 
-    if uploaded:
-        df = pd.read_csv(uploaded)
-        st.markdown(f"**{len(df):,} baris** terdeteksi. Preview 5 baris pertama:")
-        st.dataframe(df.head(5), use_container_width=True)
-
-        required_cols = [
-            "avg_payment_value","total_payment_value","avg_installments","max_installments",
-            "avg_price","total_price","avg_freight","freight_ratio",
-            "avg_review_score","min_review_score","review_gap","review_count",
-            "total_items","total_orders","avg_order_value","frequency","monetary",
-            "customer_lifetime_days","customer_state","dominant_payment_type","dominant_category"
-        ]
-        missing = [c for c in required_cols if c not in df.columns]
-        if missing:
-            st.error(f"❌ Kolom tidak ditemukan: `{'`, `'.join(missing)}`")
-            st.stop()
-
-        df["min_review_score"] = df.apply(
-            lambda r: min(float(r["min_review_score"]), float(r["avg_review_score"])), axis=1
-        )
-        df["review_gap"] = (df["avg_review_score"] - df["min_review_score"]).round(4)
-
-        if st.button("🚀 Jalankan Prediksi Batch", use_container_width=True):
-            all_results = []
-            n_chunks    = math.ceil(len(df) / 1000)
-            progress    = st.progress(0)
-            status      = st.empty()
-            errors      = []
-
-            int_cols = ["max_installments","review_count","total_items",
-                        "total_orders","frequency","customer_lifetime_days"]
-
-            for i in range(n_chunks):
-                chunk     = df.iloc[i*1000:(i+1)*1000].copy()
-                customers = chunk.to_dict(orient="records")
-
-                for c in customers:
-                    for col in int_cols:
-                        if col in c and c[col] is not None:
-                            c[col] = int(c[col])
-                    for col in ["avg_payment_value","total_payment_value","avg_installments",
-                                "avg_price","total_price","avg_freight","freight_ratio",
-                                "avg_review_score","min_review_score","review_gap",
-                                "avg_order_value","monetary"]:
-                        if col in c and c[col] is not None:
-                            c[col] = float(c[col])
-
-                try:
-                    r = requests.post(
-                        f"{API_URL}/predict/batch",
-                        json={"customers": customers},
-                        timeout=60,
-                    )
-                    r.raise_for_status()
-                    all_results.extend(r.json()["predictions"])
-                except Exception as e:
-                    errors.append(f"Chunk {i+1}: {e}")
-
-                progress.progress((i+1) / n_chunks)
-                status.caption(f"Memproses {min((i+1)*1000, len(df)):,} / {len(df):,} baris...")
-
-            progress.empty()
-            status.empty()
-
-            if errors:
-                for err in errors:
-                    st.error(err)
-
-            if all_results:
-                result_df  = pd.DataFrame(all_results)
-                total      = len(result_df)
-                churn_n    = int(result_df["is_churn"].sum())
-                churn_rate = churn_n / total
-
-                st.markdown("---")
-                m1, m2, m3, m4 = st.columns(4)
-                with m1:
-                    st.markdown(f"""<div class="metric-card">
-                        <div class="metric-label">Total Customer</div>
-                        <div class="metric-value">{total:,}</div></div>""", unsafe_allow_html=True)
-                with m2:
-                    st.markdown(f"""<div class="metric-card danger">
-                        <div class="metric-label">Predicted Churn</div>
-                        <div class="metric-value">{churn_n:,}</div></div>""", unsafe_allow_html=True)
-                with m3:
-                    st.markdown(f"""<div class="metric-card success">
-                        <div class="metric-label">Retained</div>
-                        <div class="metric-value">{total - churn_n:,}</div></div>""", unsafe_allow_html=True)
-                with m4:
-                    cr_class = "danger" if churn_rate > 0.5 else "warning"
-                    st.markdown(f"""<div class="metric-card {cr_class}">
-                        <div class="metric-label">Churn Rate</div>
-                        <div class="metric-value">{churn_rate*100:.1f}%</div></div>""", unsafe_allow_html=True)
-
-                st.markdown("##### Distribusi Churn Probability")
-                hist = (
-                    result_df["churn_probability"]
-                    .pipe(lambda s: pd.cut(s, bins=10))
-                    .value_counts()
-                    .sort_index()
-                    .rename(index=str)
-                )
-                st.bar_chart(hist)
-
-                st.markdown("##### Hasil Prediksi")
-                display_df = result_df.copy()
-                display_df["churn_probability"] = display_df["churn_probability"].map(lambda x: f"{x*100:.2f}%")
-                display_df["is_churn"]          = display_df["is_churn"].map({True: "🔴 Churn", False: "🟢 Retained"})
-                st.dataframe(display_df, use_container_width=True, height=400)
-
-                st.download_button(
-                    "⬇️ Download Hasil CSV",
-                    result_df.to_csv(index=False).encode(),
-                    "hasil_prediksi.csv",
-                    "text/csv",
-                )
+@st.cache_data(ttl=300, show_spinner=False)
+def score_batch(customers: tuple[tuple, ...]) -> list[dict]:
+    """Panggil /v2/repeat/score/batch per 1000 baris (input tuple agar bisa di-cache)."""
+    rows = [dict(zip(("customer_id", "recency_days", "frequency", "monetary", "tenure_days"), c))
+            for c in customers]
+    out = []
+    for i in range(0, len(rows), 1000):
+        r = requests.post(f"{API_URL}/v2/repeat/score/batch",
+                          json={"customers": rows[i:i + 1000]}, timeout=60)
+        r.raise_for_status()
+        out.extend(r.json()["predictions"])
+    return out
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE 3 — Monitoring
-# ═══════════════════════════════════════════════════════════════════════════════
-elif page == "📊 Monitoring":
-    st.title("📊 Monitoring & Drift Detection")
+def to_tuples(df: pd.DataFrame) -> tuple[tuple, ...]:
+    return tuple(
+        (str(r.customer_id), int(r.recency_days), int(r.frequency), float(r.monetary), int(r.tenure_days))
+        for r in df.itertuples(index=False)
+    )
 
-    col_left, _ = st.columns([1, 3])
-    with col_left:
-        window = st.slider("Window (jam)", 1, 720, 24)
-        st.button("🔄 Refresh")
 
-    try:
-        drift  = requests.get(f"{API_URL}/monitoring/drift",  params={"window_hours": window}, timeout=5).json()
-        recent = requests.get(f"{API_URL}/monitoring/recent", params={"limit": 100},            timeout=5).json()
-    except Exception as e:
-        st.error(f"Tidak bisa konek ke API: {e}")
-        st.caption(f"Target API: `{API_URL}` — set env var `API_URL` untuk mengubah.")
+def pct(x: float, digits: int = 2) -> str:
+    """Persentase dengan pembulatan half-up (0.565% → 0.57%), konsisten dengan README & notebook."""
+    q = Decimal(1).scaleb(-digits)
+    return f"{Decimal(str(round(x * 100, 10))).quantize(q, rounding=ROUND_HALF_UP)}%"
+
+
+def kpi(value: str, text: str, accent: bool = False) -> str:
+    return (f'<div class="kpi"><div class="kpi-value{" accent" if accent else ""}">{value}</div>'
+            f'<div class="kpi-text">{text}</div></div>')
+
+
+def footer() -> None:
+    st.markdown(
+        f'<div class="footer">Built by Farah Aulia Kirana · '
+        f'<a href="{REPO_URL}">Code and full write-up</a> · '
+        f'<a href="{REPO_URL}/blob/main/r/ab_test_design.md">Experiment design (R)</a> · '
+        "Data: Olist Brazilian E-Commerce public dataset (CC BY-NC-SA 4.0), orders September 2016 – "
+        "August 2018. Historical data; the project was built in 2026.</div>",
+        unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Sidebar (halaman bisa dipilih lewat ?page=)
+# ---------------------------------------------------------------------------
+
+slug = st.query_params.get("page", "overview")
+with st.sidebar:
+    st.markdown("### Olist repeat purchase")
+    page = st.radio("Page", list(PAGES.values()),
+                    index=list(PAGES).index(slug) if slug in PAGES else 0,
+                    label_visibility="collapsed")
+    st.query_params["page"] = next(k for k, v in PAGES.items() if v == page)
+    st.divider()
+    health = get_health()
+    if health and health.get("repeat_model_loaded"):
+        st.caption(f"API connected · model {health.get('repeat_model_version')}")
+    elif health:
+        st.caption("API connected, but the model is not loaded. "
+                   "Run `python train_snapshot_pipeline.py`.")
+    else:
+        st.caption(f"API offline (`{API_URL}`). The Overview page still works.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Overview
+# ═══════════════════════════════════════════════════════════════════════════
+if page == PAGES["overview"]:
+    st.title("Who will buy again?")
+    st.markdown(
+        '<p class="lede">96.9% of Olist customers order only once. This project predicts which '
+        "customers are most likely to place another order in the next 90 days, checks that "
+        "prediction on months the model never saw, and sizes the A/B test needed to prove that a "
+        "second-purchase incentive actually works.</p>",
+        unsafe_allow_html=True,
+    )
+
+    backtest = load_backtest()
+    metrics = load_snapshot_metrics()
+    km = load_km_curve()
+    ab = load_ab_summary()
+
+    if backtest is None or metrics is None:
+        st.info("Model outputs not found. Run `python train_snapshot_pipeline.py --backtest` "
+                "to generate `outputs/backtest_snapshot.csv` and `outputs/metrics_snapshot.json`.")
         st.stop()
 
-    st.markdown("---")
-    d1, d2, d3 = st.columns(3)
-    with d1:
-        st.markdown(f"""<div class="metric-card">
-            <div class="metric-label">Request ({window}h terakhir)</div>
-            <div class="metric-value">{drift.get('request_count', 0):,}</div></div>""",
-            unsafe_allow_html=True)
-    with d2:
-        churn_rate = drift.get("churn_rate_recent")
-        cr_str     = f"{churn_rate*100:.1f}%" if churn_rate is not None else "—"
-        cr_class   = "danger" if churn_rate and churn_rate > 0.5 else "success"
-        st.markdown(f"""<div class="metric-card {cr_class}">
-            <div class="metric-label">Churn Rate Recent</div>
-            <div class="metric-value">{cr_str}</div></div>""",
-            unsafe_allow_html=True)
-    with d3:
-        flagged = drift.get("flagged_features", [])
-        f_class = "warning" if flagged else "success"
-        f_sub   = "⚠️ " + ", ".join(flagged[:3]) if flagged else "✅ Tidak ada drift"
-        st.markdown(f"""<div class="metric-card {f_class}">
-            <div class="metric-label">Flagged Features</div>
-            <div class="metric-value">{len(flagged)}</div>
-            <div class="metric-sub">{f_sub}</div></div>""",
+    lr = backtest[backtest["model"] == "rfm_logreg"]
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        if ab:
+            st.markdown(kpi(pct(ab["repeat_rate_90d"]),
+                            "of new customers buy again within 90 days of their first order"),
+                        unsafe_allow_html=True)
+    with k2:
+        st.markdown(kpi(f"{lr['lift_top1pct'].mean():.1f}×",
+                        "higher repeat rate among the top 1% of scored customers than average "
+                        f"(range {lr['lift_top1pct'].min():.1f}–{lr['lift_top1pct'].max():.1f}× "
+                        f"across {len(lr)} test periods)", accent=True),
+                    unsafe_allow_html=True)
+    with k3:
+        if ab:
+            st.markdown(kpi(f"{ab['n_total_for_20pct_lift'] / 1000:.0f}K",
+                            "new customers needed in an A/B test to detect a +20% uplift from a "
+                            f"second-purchase incentive (~{ab['months_for_20pct_lift']:.0f} months)"),
+                        unsafe_allow_html=True)
+
+    test = metrics["test"]["rfm_logreg"]
+    top_n = round(test["n"] * 0.01)
+    top_hits = round(test["precision_top1pct"] * top_n)
+    st.markdown(
+        f'<div class="proof"><b>Checked on customers the model never saw.</b> On 1 June 2018 the model '
+        f"ranked {test['n']:,} customers. Of the {top_n:,} it ranked highest, <b>{top_hits} ordered "
+        f"again</b> within 90 days ({pct(test['precision_top1pct'], 1)}), against "
+        f"{pct(test['base_rate'])} for all customers.</div>",
+        unsafe_allow_html=True)
+
+    st.subheader("What to do with this")
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        st.markdown(
+            '<div class="rec"><div class="rec-title">Win the second order, not loyalty</div>'
+            '<div class="rec-text">Almost everyone buys once. A customer who has ordered twice is '
+            "about 3× more likely to order again, so the first goal is a second purchase, early: "
+            "most returns happen in the first month.</div></div>", unsafe_allow_html=True)
+    with r2:
+        mde = f"+{ab['mde_relative_3_months'] * 100:.0f}%" if ab else "large"
+        st.markdown(
+            '<div class="rec"><div class="rec-title">Prove the incentive with an A/B test</div>'
+            '<div class="rec-text">A 3-month test can only detect uplifts of about '
+            f"{mde}. A 15% voucher pays off only if it doubles repeat purchases at a 30% margin, "
+            "so test smaller or pay-on-return incentives.</div></div>", unsafe_allow_html=True)
+    with r3:
+        seg_text = (f"the top 1% return at {pct(test['precision_top1pct'], 1)} "
+                    f"({test['lift_top1pct']:.1f}× average), the top 5% at "
+                    f"{pct(test['precision_top5pct'], 1)} ({test['lift_top5pct']:.1f}×)")
+        st.markdown(
+            '<div class="rec"><div class="rec-title">Use the score for small, focused campaigns</div>'
+            f'<div class="rec-text">The score works best at the very top: {seg_text}. For a broad '
+            "programme, simple rules perform almost as well.</div></div>", unsafe_allow_html=True)
+
+    st.write("")
+    left, right = st.columns([1.15, 1])
+    with left:
+        st.subheader("Does the model beat simple rules?")
+        bt = backtest[backtest["model"].isin(MODEL_LABELS)].copy()
+        bt["Model"] = bt["model"].map(MODEL_LABELS)
+        bt["Test period"] = bt["test_snapshot"].map(PERIOD_LABELS)
+        bars = alt.Chart(bt).mark_bar().encode(
+            x=alt.X("Test period:N", title=None, sort=list(PERIOD_LABELS.values()),
+                    axis=alt.Axis(labelAngle=0)),
+            xOffset=alt.XOffset("Model:N", sort=list(MODEL_COLORS)),
+            y=alt.Y("lift_top1pct:Q", title="Top-1% repeat rate ÷ average"),
+            color=alt.Color("Model:N", scale=alt.Scale(domain=list(MODEL_COLORS),
+                                                       range=list(MODEL_COLORS.values())),
+                            legend=alt.Legend(orient="bottom", title=None)),
+            tooltip=["Model", "Test period",
+                     alt.Tooltip("lift_top1pct:Q", title="Lift (top 1%)", format=".2f"),
+                     alt.Tooltip("pr_auc:Q", title="PR-AUC", format=".4f")],
+        )
+        baseline = alt.Chart(pd.DataFrame({"y": [1]})).mark_rule(
+            strokeDash=[4, 4], color=MUTED).encode(y="y:Q")
+        st.altair_chart((bars + baseline).properties(height=300), use_container_width=True)
+        st.markdown(
+            '<p class="note">Each period is a true out-of-time test: the model is trained only on '
+            "earlier data. The 4-feature logistic regression is the most stable, so it is the model "
+            "the API serves. Dashed line = no better than random.</p>", unsafe_allow_html=True)
+
+    with right:
+        st.subheader("When do new customers come back?")
+        if km is not None:
+            km_plot = km.assign(pct=km["repeat_rate"] * 100, lo=km["ci_low"] * 100,
+                                hi=km["ci_high"] * 100)
+            band = alt.Chart(km_plot).mark_area(opacity=0.18, color=ACCENT).encode(
+                x=alt.X("days:Q", title="Days since first order"),
+                y=alt.Y("lo:Q", title="% of customers who ordered again"), y2="hi:Q")
+            line = alt.Chart(km_plot).mark_line(color=ACCENT, strokeWidth=2.5).encode(
+                x="days:Q", y="pct:Q",
+                tooltip=[alt.Tooltip("days:Q", title="Day"),
+                         alt.Tooltip("pct:Q", title="Ordered again (%)", format=".2f")])
+            mark90 = alt.Chart(pd.DataFrame({"days": [90]})).mark_rule(
+                strokeDash=[4, 4], color=MUTED).encode(x="days:Q")
+            st.altair_chart((band + line + mark90).properties(height=300), use_container_width=True)
+            st.markdown(
+                '<p class="note">Kaplan–Meier estimate (R), counting only orders at least one day '
+                "after the first. The dashed line marks 90 days.</p>", unsafe_allow_html=True)
+        else:
+            st.info("Run `Rscript r/render.R` to generate the survival curve.")
+
+    st.subheader("What makes another purchase more likely?")
+    coefs = metrics.get("rfm_logreg_coefficients")
+    if coefs:
+        names = {"log_frequency": "More past orders", "log_recency_days": "More days since last order",
+                 "log_tenure_days": "Longer time since first order", "log_monetary": "Higher total spend"}
+        cdf = pd.DataFrame({"Factor": [names.get(k, k) for k in coefs], "Effect": list(coefs.values())})
+        cdf["Direction"] = cdf["Effect"].map(lambda v: "Raises the chance" if v > 0 else "Lowers the chance")
+        coef_chart = alt.Chart(cdf).mark_bar().encode(
+            x=alt.X("Effect:Q", title="Effect on the log-odds of buying again (per 1 SD)"),
+            y=alt.Y("Factor:N", sort="-x", title=None,
+                    axis=alt.Axis(labelLimit=320, labelOverlap=False, labelFontSize=13)),
+            color=alt.Color("Direction:N", scale=alt.Scale(
+                domain=["Raises the chance", "Lowers the chance"], range=[ACCENT, SOFT]),
+                legend=alt.Legend(orient="bottom", title=None)),
+            tooltip=["Factor", alt.Tooltip("Effect:Q", format=".3f")],
+        ).properties(height=alt.Step(38))
+        st.altair_chart(coef_chart, use_container_width=True)
+        st.markdown(
+            '<p class="note">Coefficients of the served logistic regression (features log-transformed '
+            "and standardised). These are associations, not causes.</p>", unsafe_allow_html=True)
+
+    with st.expander("How this model replaced the first churn model"):
+        st.markdown(
+            "- The first churn model scored **ROC-AUC 0.82**, but its label was equivalent to "
+            "*“last order before 19 July 2018”*. A placebo test showed the same features predicted "
+            "arbitrary purchase-date windows with AUC 0.68–0.80, so it mostly learned **when** people "
+            "bought.\n"
+            "- The current model uses a snapshot design: features only from orders before a date *T*, "
+            "label = a new order in the 90 days after *T*, tested on later periods.\n"
+            "- Its ROC-AUC is lower (~0.60), but it answers the right question and beats a "
+            "recency-only rule in every test period.")
+    footer()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Score a customer
+# ═══════════════════════════════════════════════════════════════════════════
+elif page == PAGES["score"]:
+    st.title("Score a customer")
+    st.markdown('<p class="lede">How likely is this customer to order again in the next 90 days, '
+                "and should they be in a priority group?</p>", unsafe_allow_html=True)
+
+    metrics = load_snapshot_metrics()
+    base_rate = metrics["test"]["rfm_logreg"]["base_rate"] if metrics else None
+    segments = sorted(metrics["segments"]["rfm_logreg"], key=lambda s: s["min_score"],
+                      reverse=True) if metrics else []
+
+    def apply_example() -> None:
+        ex = EXAMPLES.get(st.session_state["example"])
+        if ex:
+            st.session_state["frequency"] = ex["frequency"]
+            st.session_state["recency"] = ex["recency"]
+            st.session_state["tenure"] = ex["tenure"]
+            st.session_state["monetary"] = ex["monetary"]
+
+    if "frequency" not in st.session_state:
+        st.session_state["example"] = "Loyal repeat buyer"
+        apply_example()
+
+    st.radio("Start from an example", [*EXAMPLES, "Custom"], key="example", horizontal=True,
+             on_change=apply_example)
+
+    inputs, result = st.columns([1, 1.35], gap="large")
+    with inputs:
+        st.markdown("**Customer history on the scoring date**")
+        frequency = st.number_input("Orders placed so far", min_value=1, step=1, key="frequency")
+        recency = st.number_input("Days since the last order", min_value=0, step=1, key="recency")
+        if frequency == 1:
+            st.session_state["tenure"] = int(recency)
+        tenure = st.number_input(
+            "Days since the first order", min_value=0, step=1, key="tenure",
+            disabled=frequency == 1,
+            help="For a one-order customer this equals the days since the last order.")
+        monetary = st.number_input("Total spent so far (BRL)", min_value=0.0, step=10.0, key="monetary")
+
+    payload = {"customer_id": None, "recency_days": int(recency), "frequency": int(frequency),
+               "monetary": float(monetary), "tenure_days": int(tenure)}
+
+    with result:
+        if tenure < recency:
+            st.warning("Days since the first order cannot be smaller than days since the last order.")
+            st.stop()
+        try:
+            r = requests.post(f"{API_URL}/v2/repeat/score", json=payload, timeout=10)
+        except requests.RequestException:
+            api_offline_message()
+            st.stop()
+        if r.status_code == 503:
+            st.error("The API is running but the model is not loaded. "
+                     "Run `python train_snapshot_pipeline.py`, then restart the API.")
+            st.stop()
+        if r.status_code == 422:
+            st.error(f"The API rejected these inputs: {r.json().get('detail')}")
+            st.stop()
+        resp = r.json()
+        p = resp["repeat_probability"]
+        times = p / base_rate if base_rate else None
+        seg = resp["segment"]
+
+        seg_line = (
+            f"Priority group: <b>{SEGMENT_TEXT[seg]}</b> of customers. Historically, "
+            f"{resp['segment_precision'] * 100:.1f}% of this group ordered again "
+            f"({resp['segment_lift']:.1f}× the average)."
+            if seg != "rest" else
+            "Not in a priority group: the score is below the top-10% cut-off."
+        )
+        st.markdown(
+            f'<div class="result"><div class="note">Chance of ordering again in the next 90 days</div>'
+            f'<div class="result-big">{p * 100:.2f}%</div>'
+            + (f'<div class="result-line">{times:.1f}× the average customer '
+               f'({pct(base_rate)}).</div>' if times else "")
+            + f'<div class="result-line">{seg_line}</div></div>',
             unsafe_allow_html=True)
 
-    feature_means = drift.get("feature_means", {})
-    if feature_means:
-        st.markdown("##### Rata-rata Fitur (rolling window)")
-        means_df = pd.DataFrame(
-            list(feature_means.items()), columns=["Feature", "Mean"]
-        ).sort_values("Mean", ascending=False)
-        st.dataframe(means_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("Belum ada data fitur dalam window ini.")
+        if base_rate and segments:
+            refs = pd.DataFrame(
+                [{"Label": "Average customer", "Score": base_rate, "Kind": "reference"}]
+                + [{"Label": f"{SEGMENT_TEXT[s['segment']]} cut-off", "Score": s["min_score"],
+                    "Kind": "reference"} for s in reversed(segments)]
+                + [{"Label": "This customer", "Score": p, "Kind": "customer"}])
+            refs["Percent"] = refs["Score"] * 100
+            st.altair_chart(alt.Chart(refs).mark_bar().encode(
+                x=alt.X("Percent:Q", title="Chance of ordering again (%)"),
+                y=alt.Y("Label:N", sort=None, title=None, axis=alt.Axis(labelLimit=220)),
+                color=alt.Color("Kind:N", scale=alt.Scale(domain=["reference", "customer"],
+                                                          range=[SOFT, ACCENT]), legend=None),
+                tooltip=["Label", alt.Tooltip("Percent:Q", format=".2f")],
+            ).properties(height=alt.Step(30), title="Where this customer sits"),
+                use_container_width=True)
 
-    drift_flags = drift.get("drift_flags", {})
-    if drift_flags:
-        st.markdown("##### Drift per Fitur (vs Training Baseline)")
-        flags_rows = [
-            {
-                "Feature":     feat,
-                "Train Mean":  info.get("train_mean"),
-                "Recent Mean": info.get("recent_mean"),
-                "% Change":    f"{info.get('pct_change', 0):.2f}%",
-                "Status":      "⚠️ Drift" if info.get("flagged") else "✅ Normal",
-            }
-            for feat, info in drift_flags.items()
-        ]
-        st.dataframe(pd.DataFrame(flags_rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("Drift comparison belum tersedia — `metrics.json` perlu berisi `feature_means_train`.")
+    st.subheader("What if this customer waits longer before ordering again?")
+    days = list(range(0, 366, 15))
+    grid = tuple(("what-if", d, int(frequency), float(monetary),
+                  d if frequency == 1 else max(int(tenure), d)) for d in days)
+    try:
+        curve = score_batch(grid)
+        cdf = pd.DataFrame({"Days since last order": days,
+                            "Chance (%)": [c["repeat_probability"] * 100 for c in curve]})
+        line = alt.Chart(cdf).mark_line(color=ACCENT, strokeWidth=2.5).encode(
+            x="Days since last order:Q", y="Chance (%):Q",
+            tooltip=["Days since last order", alt.Tooltip("Chance (%):Q", format=".2f")])
+        now = alt.Chart(pd.DataFrame({"Days since last order": [int(recency)],
+                                      "Chance (%)": [p * 100]})).mark_point(
+            color=INK, size=90, filled=True).encode(x="Days since last order:Q", y="Chance (%):Q")
+        st.altair_chart((line + now).properties(height=260), use_container_width=True)
+        st.markdown('<p class="note">Other inputs held constant. The dot is this customer today: '
+                    "the longer the silence, the lower the chance of another order.</p>",
+                    unsafe_allow_html=True)
+    except requests.RequestException:
+        st.caption("What-if curve unavailable: the batch endpoint did not respond.")
 
-    preds = recent.get("predictions", [])
-    if preds:
-        st.markdown("##### Prediksi Terbaru (100 terakhir)")
-        rec_df = pd.DataFrame(preds)
-        rec_df["is_churn"]          = rec_df["is_churn"].map({1: "🔴 Churn", 0: "🟢 Retained"})
-        rec_df["churn_probability"] = rec_df["churn_probability"].map(lambda x: f"{x*100:.2f}%")
-        st.dataframe(rec_df, use_container_width=True, height=350, hide_index=True)
+    st.info("A high score means the customer is likely to return **on their own**. Whether an "
+            "incentive changes that can only be measured with an A/B test.")
+    footer()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Score a customer list
+# ═══════════════════════════════════════════════════════════════════════════
+else:
+    st.title("Score a customer list")
+    st.markdown('<p class="lede">Turn a customer list into a priority list for a campaign. Try it on '
+                "real customers the model never saw, or upload your own file.</p>",
+                unsafe_allow_html=True)
+
+    required = ["customer_id", "recency_days", "frequency", "monetary", "tenure_days"]
+    demo = load_demo_customers()
+    source = st.radio("Data", ["Real held-out customers (June 2018 sample)", "Upload a CSV"],
+                      horizontal=True, label_visibility="collapsed",
+                      index=0 if demo is not None else 1)
+
+    actual = None
+    if source.startswith("Real"):
+        if demo is None:
+            st.info("Demo sample not found. Run `python train_snapshot_pipeline.py` to create "
+                    "`outputs/demo_customers_2018-06.csv`.")
+            st.stop()
+        df = demo[required].copy()
+        actual = demo[["customer_id", "ordered_again_90d"]]
+        st.markdown(f'<p class="note">{len(df):,} randomly sampled customers as of 1 June 2018. '
+                    "The model never saw this period. The file also records whether each customer "
+                    "actually ordered again in the following 90 days, so you can check the "
+                    "ranking against what really happened.</p>", unsafe_allow_html=True)
     else:
-        st.info("Belum ada prediksi tercatat. Lakukan prediksi dulu di halaman lain.")
+        template = pd.DataFrame(
+            [["cust_001", 12, 3, 420.0, 300], ["cust_002", 45, 1, 89.9, 45],
+             ["cust_003", 200, 2, 150.0, 410]], columns=required)
+        st.download_button("Download a CSV template", template.to_csv(index=False).encode(),
+                           "repeat_purchase_template.csv", "text/csv")
+        uploaded = st.file_uploader("Customer CSV", type=["csv"])
+        if uploaded is None:
+            st.markdown('<p class="note">No file yet. Required columns: '
+                        + ", ".join(f"<code>{c}</code>" for c in required)
+                        + ". Measure every value on the scoring date. For one-order customers, "
+                          "<code>tenure_days</code> equals <code>recency_days</code>.</p>",
+                        unsafe_allow_html=True)
+            footer()
+            st.stop()
+        df = pd.read_csv(uploaded)
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            st.error(f"Missing columns: {', '.join(missing)}. Download the template to see the format.")
+            st.stop()
+        df = df[required].copy()
+        bad = (df["tenure_days"] < df["recency_days"]) | ((df["frequency"] == 1)
+                                                         & (df["tenure_days"] != df["recency_days"]))
+        if bad.any():
+            st.error(f"{int(bad.sum())} rows have inconsistent dates (first order more recent than the "
+                     "last, or a one-order customer with different values). Fix them and upload again.")
+            st.dataframe(df[bad].head(20), use_container_width=True, hide_index=True)
+            st.stop()
+
+    with st.spinner(f"Scoring {len(df):,} customers…"):
+        try:
+            preds = pd.DataFrame(score_batch(to_tuples(df)))
+        except requests.HTTPError as e:
+            st.error(f"The API rejected the data: {e.response.text[:300]}")
+            st.stop()
+        except requests.RequestException:
+            api_offline_message()
+            st.stop()
+
+    if actual is not None:
+        preds = preds.merge(actual, on="customer_id", how="left")
+
+    agg = {"customers": ("customer_id", "size"), "hist_rate": ("segment_precision", "first")}
+    if actual is not None:
+        agg["returned"] = ("ordered_again_90d", "sum")
+    summary = preds.groupby("segment").agg(**agg).reindex(SEGMENT_ORDER).reset_index()
+    summary["customers"] = summary["customers"].fillna(0).astype(int)
+    summary["Segment"] = summary["segment"].map(SEGMENT_TEXT)
+
+    priority = int(summary.loc[summary["segment"] != "rest", "customers"].sum())
+    if actual is not None:
+        summary["returned"] = summary["returned"].fillna(0).astype(int)
+        prio = summary[summary["segment"] != "rest"]
+        rest = summary[summary["segment"] == "rest"]
+        prio_rate = prio["returned"].sum() / max(prio["customers"].sum(), 1)
+        rest_rate = rest["returned"].sum() / max(rest["customers"].sum(), 1)
+
+    k1, k2 = st.columns(2)
+    with k1:
+        st.markdown(kpi(f"{priority:,}", f"of {len(preds):,} customers fall in a priority group "
+                                         "(top 10% or better)", accent=True), unsafe_allow_html=True)
+    with k2:
+        if actual is not None:
+            st.markdown(kpi(f"{prio_rate / rest_rate:.1f}×" if rest_rate else "—",
+                            f"how often priority customers actually ordered again vs. everyone else "
+                            f"in this sample ({pct(prio_rate, 1)} vs {pct(rest_rate, 1)})"),
+                        unsafe_allow_html=True)
+
+    st.write("")
+    t_col, c_col = st.columns([1.25, 1], gap="large")
+    with t_col:
+        table = summary[["Segment", "customers"]].rename(columns={"customers": "Customers"})
+        table["Expected repeat rate"] = summary["hist_rate"].map(
+            lambda v: pct(v, 1) if pd.notna(v) else "—")
+        if actual is not None:
+            table["Actually returned"] = [
+                f"{r:,} ({pct(r / c, 1)})" if c else "—"
+                for r, c in zip(summary["returned"], summary["customers"])]
+        st.dataframe(table, use_container_width=True, hide_index=True)
+        note = ("Expected rates come from the full June 2018 test period (each group counted "
+                "separately: Top 1–5% excludes the top 1%).")
+        if actual is not None:
+            note += (f" This sample has only {int(summary['returned'].sum())} repeat buyers, so "
+                     "its group rates are noisy.")
+        st.markdown(f'<p class="note">{note}</p>', unsafe_allow_html=True)
+    with c_col:
+        st.altair_chart(alt.Chart(summary).mark_bar(color=ACCENT).encode(
+            x=alt.X("customers:Q", title="Customers"),
+            y=alt.Y("Segment:N", sort=[SEGMENT_TEXT[s] for s in SEGMENT_ORDER], title=None,
+                    axis=alt.Axis(labelLimit=220)),
+            tooltip=["Segment", "customers"],
+        ).properties(height=alt.Step(40), title="How many customers land in each group?"),
+            use_container_width=True)
+
+    st.subheader("Priority list")
+    out = preds.sort_values("repeat_probability", ascending=False).copy()
+    out["segment"] = out["segment"].map(SEGMENT_TEXT)
+    cols = {"customer_id": "Customer", "repeat_probability": "Chance in 90 days", "segment": "Group"}
+    if actual is not None:
+        cols["ordered_again_90d"] = "Actually ordered again"
+        out["ordered_again_90d"] = out["ordered_again_90d"].map({1: "Yes", 0: "No"})
+    st.dataframe(out[list(cols)].rename(columns=cols), use_container_width=True, hide_index=True,
+                 height=360,
+                 column_config={"Chance in 90 days": st.column_config.NumberColumn(format="%.4f")})
+    priority_rows = out[out["segment"] != SEGMENT_TEXT["rest"]]
+    st.download_button(
+        f"Download the priority list ({len(priority_rows):,} customers)",
+        priority_rows.to_csv(index=False).encode(), "priority_customers.csv", "text/csv",
+        disabled=priority_rows.empty, type="primary")
+    footer()

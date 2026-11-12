@@ -1,7 +1,7 @@
 # Repeat-Purchase Prediction & Experiment Design — Olist E-Commerce
 
 [![CI](https://github.com/FarahAuliaKirana/Churn-Prediction/actions/workflows/ci.yml/badge.svg)](https://github.com/FarahAuliaKirana/Churn-Prediction/actions/workflows/ci.yml)
-· Python · R · scikit-learn · XGBoost · SHAP · FastAPI · Docker · GitHub Actions
+· Python · R · scikit-learn · XGBoost · SHAP · FastAPI · Streamlit · Docker · GitHub Actions
 
 🇮🇩 Versi Bahasa Indonesia (lebih detail): [README.id.md](README.id.md)
 
@@ -19,6 +19,21 @@ An end-to-end customer analytics project on the public Olist Brazilian e-commerc
 
 ---
 
+## Dashboard
+
+A Streamlit dashboard (`streamlit run streamlit_app.py`, with the API running) presents the findings and turns the model into a campaign tool.
+
+**Overview** — the story, the proof on held-out customers, recommendations, and the evidence behind them:
+
+![Dashboard overview](docs/images/dashboard_overview.png)
+
+| Score a customer | Score a customer list |
+|---|---|
+| Example customers, a plain-language result, and a what-if curve | Real held-out customers (June 2018) or your own CSV → priority list, checked against what actually happened |
+| ![Score a customer](docs/images/dashboard_score.png) | ![Score a customer list](docs/images/dashboard_list.png) |
+
+---
+
 ## How the project evolved
 
 | Step | What happened | Evidence |
@@ -30,6 +45,7 @@ An end-to-end customer analytics project on the public Olist Brazilian e-commerc
 | 5. Redesign | Snapshot-based repeat-purchase target, out-of-time test, recency & RFM baselines, bootstrap significance | NB06 |
 | 6. Backtest | 3 out-of-time periods; RFM logistic regression is the most stable model | NB06, `src/models/backtest.py` |
 | 7. Experiment design | Survival, power, and break-even analysis for a second-purchase voucher | `r/ab_test_design.md` |
+| 8. Deployment | FastAPI `/v2/repeat/score` serves the RFM logistic regression with targeting segments; Streamlit dashboard; Docker | `src/api/`, `streamlit_app.py` |
 
 ---
 
@@ -82,9 +98,10 @@ src/
   models/train.py, evaluate.py   v1 training, threshold, lift
   models/snapshot_model.py       v2 models, ranking metrics, bootstrap
   models/backtest.py             v2 expanding-window backtest
-  api/                           FastAPI service (serves the v1 model)
+  api/                           FastAPI service (v2 repeat scoring + legacy v1 churn)
   monitoring/drift.py            Prediction logging & drift checks
-tests/                           150 unit tests (leakage checks, metrics, API)
+streamlit_app.py                 Dashboard: overview, score a customer, score a customer list
+tests/                           179 unit tests (leakage checks, metrics, API v1 & v2)
 train_pipeline.py                v1 training CLI
 train_snapshot_pipeline.py       v2 training CLI (--backtest for the 3-period backtest)
 ```
@@ -102,12 +119,36 @@ pip install -r requirements.txt
 Download the [Olist dataset from Kaggle](https://www.kaggle.com/olistbr/brazilian-ecommerce) into `data/raw/`, then:
 
 ```bash
-python train_pipeline.py                      # v1 churn model (used by the API)
 python train_snapshot_pipeline.py --backtest  # v2 repeat-purchase model + 3-period backtest
+python train_pipeline.py                      # v1 churn model (legacy endpoints)
 Rscript r/render.R                            # experiment design report (needs pwr, knitr, markdown)
 uvicorn src.api.main:app --reload             # API docs at http://localhost:8000/docs
-pytest tests/                                 # 150 tests
+streamlit run streamlit_app.py                # dashboard (calls the API)
+pytest tests/                                 # 179 tests
 ```
+
+### API (v2)
+
+`POST /v2/repeat/score` returns the probability that a customer orders again within 90 days, plus a targeting segment based on score cut-offs from the latest test snapshot:
+
+```bash
+curl -X POST http://localhost:8000/v2/repeat/score \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id": "cust_001", "recency_days": 20, "frequency": 2, "monetary": 250.0, "tenure_days": 180}'
+```
+
+```json
+{
+  "customer_id": "cust_001",
+  "repeat_probability": 0.027883,
+  "segment": "top1pct",
+  "segment_lift": 6.37,
+  "segment_precision": 0.036,
+  "model_version": "2.0.0-rfm-logreg"
+}
+```
+
+`POST /v2/repeat/score/batch` scores up to 1,000 customers and returns segment counts. The legacy v1 churn endpoints (`/predict`, `/predict/batch`) are kept for compatibility and marked deprecated. With Docker: `docker build -t olist-repeat-api . && docker run -p 8000:8000 olist-repeat-api` (run both training pipelines first).
 
 ---
 
@@ -115,7 +156,7 @@ pytest tests/                                 # 150 tests
 
 - **Weak signal, small positive class:** 312–618 repeaters per split, so bootstrap intervals are wide.
 - **Prediction ≠ causation:** the model finds customers likely to return on their own. Deciding who should receive a voucher needs the A/B test, then uplift modeling.
-- **The API still serves the v1 model.** Migrating to the v2 RFM logistic regression requires a new request schema (`recency_days`, `tenure_days`, ...).
+- **No drift monitoring for v2 yet:** prediction logging and drift checks currently cover the legacy v1 endpoints only.
 - **Short history:** the backtest is limited to 3 periods because order data effectively stops at the end of August 2018.
 
 ---
@@ -123,5 +164,7 @@ pytest tests/                                 # 150 tests
 ## Dataset
 
 [Olist Brazilian E-Commerce Public Dataset](https://www.kaggle.com/olistbr/brazilian-ecommerce) (CC BY-NC-SA 4.0). ~100K orders and 96K customers. **Data period:** September 2016 – October 2018 (orders effectively stop at the end of August 2018). This is historical data released by Olist; the project itself was built in 2026.
+
+`outputs/demo_customers_2018-06.csv` is a 5,000-customer sample derived from this dataset (anonymised Olist customer IDs, four RFM features, and whether the customer ordered again within 90 days), shared under the same CC BY-NC-SA 4.0 license for the dashboard demo.
 
 *Farah Aulia Kirana · 2026*
