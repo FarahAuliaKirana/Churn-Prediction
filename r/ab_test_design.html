@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="eng">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<meta name="generator" content="litedown 1.0">
+<title>Desain A/B Test — Voucher Second Purchase</title>
+<style type="text/css">
+:root {
+  --accent: steelblue;
+  --muted-bg: #f8f8f8;
+  --border-color: #eee;
+  --rule-color: #666;
+}
+body {
+  font-family: sans-serif;
+  max-width: 50em;
+  margin: auto;
+  padding: 1em;
+  line-height: 1.5;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+.abstract, .footnotes, footer, #refs, div:has(> .caption) { font-size: .9em; }
+li li { font-size: .95em; }
+ul:has(li > input[type="checkbox"]) { list-style: none; padding-left: 1em; }
+*, :before, :after { box-sizing: border-box; }
+a { color: var(--accent); }
+pre, img { max-width: 100%; }
+pre {
+  white-space: pre-wrap; word-break: break-word;
+  code { display: block; padding: 1em; overflow-x: auto; }
+}
+:not(pre, th) > code, code[class], div > .caption { background: var(--muted-bg); }
+pre > code:is(:not([class]), .language-plain, .language-none, .plain), .box, .figure, .table { background: inherit; border: 1px solid var(--border-color); }
+pre > code {
+  &.message { border-color: #9eeaf9; }
+  &.warning { background: #fff3cd; border-color: #fff3cd; }
+  &.error { background: #f8d7da; border-color: #f8d7da; }
+}
+.fenced-chunk { border-left: 1px solid var(--rule-color); }
+.code-fence {
+  opacity: .4;
+  border: 1px dashed var(--rule-color);
+  border-left: 2px solid;
+  &:hover { opacity: inherit; }
+}
+.box, .figure, .table, table { margin: 1em auto; }
+div > .caption { padding: 1px 1em; }
+.figure { p:has(img, svg), pre:has(svg) { text-align: center; } }
+.flex-col { display: flex; justify-content: space-between; }
+table {
+  &:only-child:not(.table > *) { margin: auto; }
+  th, td { padding: 5px; font-variant-numeric: tabular-nums; }
+  &:not([class]) {
+    thead, tfoot, tr:nth-child(even) { background: var(--muted-bg); }
+    thead th { border-bottom: 1px solid #ddd; }
+    border-top: 1px solid var(--rule-color);
+    border-bottom: 1px solid var(--rule-color);
+  }
+}
+blockquote {
+  color: #666;
+  margin: 0;
+  padding: 1px 1em;
+  border-left: .5em solid var(--border-color);
+}
+hr, .footnotes::before { border: 1px dashed #ddd; }
+.frontmatter { text-align: center; }
+#TOC {
+  a { text-decoration: none; }
+  ul { list-style: none; padding-left: 1em; }
+  & > ul { padding: 0; columns: 18em; }
+  ul ul { border-left: 1px solid lightsteelblue; }
+}
+article h2 { border-bottom: 1px solid var(--rule-color); }
+.appendix ~ h2 { border-bottom-style: dashed; }
+.main-number::after { content: "."; }
+span[class^="ref-number-"] { font-weight: bold; }
+.ref-number-fig::after, .ref-number-tab::after { content: ":"; }
+.cross-ref-chp::before { content: "Chapter "; }
+.cross-ref-sec::before { content: "Section "; }
+.cross-ref-apd::before { content: "Appendix "; }
+.cross-ref-fig::before, .ref-number-fig::before { content: "Figure "; }
+.cross-ref-tab::before, .ref-number-tab::before { content: "Table "; }
+.cross-ref-eqn::before, .MathJax_ref:has(mjx-mtext > mjx-c + mjx-c)::before { content: "Equation "; }
+.abstract, #refs {
+  &::before { display: block; margin: 1em auto; font-weight: bold; }
+}
+.abstract::before { content: "Abstract"; text-align: center; }
+#refs::before { content: "Bibliography"; font-size: 1.5em; }
+.ref-paren-open::before { content: "("; }
+.ref-paren-close::after { content: ")"; }
+.ref-semicolon::after { content: "; "; }
+.ref-and::after { content: " and "; }
+.ref-et-al::after { content: " et al."; font-style: italic; }
+.footnote-ref a {
+  &::before { content: "["; }
+  &::after { content: "]"; }
+}
+section.footnotes {
+  margin-top: 2em;
+  &::before { content: ""; display: block; max-width: 20em; }
+}
+.fade {
+  background: repeating-linear-gradient(135deg, white, white 30px, #ddd 32px, #ddd 32px);
+  opacity: 0.6;
+}
+@media (prefers-color-scheme: dark) {
+  :is(html, img, video, iframe) {
+    &:not(.no-invert, .no-invert *), .no-invert:not(&) { filter: invert(1); }
+  }
+  body { background: #ededed; }
+}
+@media print {
+  body { max-width: 100%; }
+  tr, img { break-inside: avoid; }
+}
+@media only screen and (min-width: 62em) {
+  body:not(.pagesjs) pre:has(.line-numbers):not(:hover) { white-space: pre; }
+}
+</style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xiee/utils@1.14.158/css/prism-xcode.min.css">
+</head>
+<body>
+<header class="frontmatter">
+<div class="title"><h1>Desain A/B Test — Voucher Second Purchase</h1></div>
+<div class="subtitle"><h2>Survival analysis &amp; power analysis di R · Olist Brazilian E-Commerce</h2></div>
+<div class="author"><h2>Farah Aulia Kirana</h2></div>
+
+</header>
+<main>
+<article class="">
+<h1 id="chp:ringkasan">Ringkasan</h1>
+<p>Analisis Python (NB06) menunjukkan masalah utama Olist adalah <strong>aktivasi</strong>: hampir semua customer hanya belanja sekali. Rekomendasi bisnis yang paling berdasar adalah <strong>voucher untuk pembelian kedua</strong> — tetapi efeknya harus dibuktikan dengan eksperimen, bukan diasumsikan.</p>
+<p>Dokumen ini menjawab tiga pertanyaan yang harus dijawab <strong>sebelum</strong> eksperimen dijalankan:</p>
+<ol>
+<li><strong>Berapa baseline-nya?</strong> Seberapa sering customer baru belanja lagi, dan kapan? → <em>survival analysis</em> (Kaplan–Meier &amp; Cox)</li>
+<li><strong>Berapa customer yang dibutuhkan, dan berapa lama?</strong> → <em>power analysis</em></li>
+<li><strong>Kapan program ini menguntungkan?</strong> → <em>break-even analysis</em></li>
+</ol>
+<blockquote>
+<p>Data: <code>data/processed/master.csv</code> (output NB01 / <code>train_pipeline.py</code>). Data order praktis berhenti akhir Agustus 2018, sehingga observasi dipotong (<em>censored</em>) di 1 September 2018. Dokumen ini dirender dengan <code>Rscript r/render.R</code>.</p>
+</blockquote>
+<h1 id="chp:1-data-waktu-sampai-pembelian-kedua">1. Data: waktu sampai pembelian kedua</h1>
+<pre><code class="language-r">m &lt;- read.csv(&quot;../data/processed/master.csv&quot;, stringsAsFactors = FALSE)
+m$ts &lt;- as.POSIXct(m$order_purchase_timestamp, tz = &quot;UTC&quot;)
+data_end &lt;- as.POSIXct(&quot;2018-09-01&quot;, tz = &quot;UTC&quot;)
+
+# Satu baris per order (master.csv ber-grain item), hanya order sebelum data_end
+o &lt;- m[!duplicated(m$order_id) &amp; m$ts &lt; data_end, ]
+o &lt;- o[order(o$customer_unique_id, o$ts), ]
+o$rank &lt;- ave(as.numeric(o$ts), o$customer_unique_id,
+              FUN = function(x) rank(x, ties.method = &quot;first&quot;))
+
+first  &lt;- o[o$rank == 1, ]
+second &lt;- setNames(o[o$rank == 2, c(&quot;customer_unique_id&quot;, &quot;ts&quot;)],
+                   c(&quot;customer_unique_id&quot;, &quot;ts2&quot;))
+d &lt;- merge(first, second, by = &quot;customer_unique_id&quot;, all.x = TRUE)
+
+d$gap_days &lt;- as.numeric(difftime(d$ts2, d$ts, units = &quot;days&quot;))
+d$same_day &lt;- !is.na(d$gap_days) &amp; d$gap_days &lt; 1
+
+# Event = pembelian kedua minimal 1 hari setelah order pertama.
+# Order kedua di hari yang sama diperlakukan sebagai satu belanjaan yang dipecah.
+d$event &lt;- as.integer(!is.na(d$gap_days) &amp; d$gap_days &gt;= 1)
+d$days  &lt;- ifelse(d$event == 1, d$gap_days,
+                  as.numeric(difftime(data_end, d$ts, units = &quot;days&quot;)))
+
+c(customers          = nrow(d),
+  second_order_any   = sum(!is.na(d$gap_days)),
+  second_same_day    = sum(d$same_day),
+  second_order_event = sum(d$event))
+</code></pre>
+<pre><code>##          customers   second_order_any    second_same_day second_order_event 
+##              96090               2987                927               2060
+</code></pre>
+<p><strong>Temuan data:</strong> dari 2,987 customer yang punya order kedua, <strong>927 (31%) terjadi di hari yang sama</strong> dengan order pertama. Ini kemungkinan besar satu sesi belanja yang dipecah menjadi beberapa order (misalnya karena beda seller), bukan customer yang “kembali”. Jika dihitung sebagai repeat purchase, baseline akan terlihat hampir 2× lebih tinggi dari kenyataan — dan ukuran sampel eksperimen akan terlalu kecil.</p>
+<h1 id="chp:2-survival-analysis-kapan-customer-kembali">2. Survival analysis: kapan customer kembali?</h1>
+<p>Kaplan–Meier dipakai karena sebagian besar customer <strong>belum selesai diamati</strong>: customer yang order pertamanya Juli 2018 baru diamati ~2 bulan. Menghitung “persentase yang kembali” secara naif akan meremehkan repeat rate untuk customer baru. Kaplan–Meier menangani ini dengan <em>right-censoring</em>.</p>
+<pre><code class="language-r">km &lt;- survfit(Surv(days, event) ~ 1, data = d)
+horizons &lt;- c(14, 30, 60, 90, 180, 365)
+s &lt;- summary(km, times = horizons)
+km_table &lt;- data.frame(
+  hari          = s$time,
+  repeat_rate   = pct(1 - s$surv),
+  ci95          = paste0(pct(1 - s$upper), &quot; – &quot;, pct(1 - s$lower)),
+  masih_diamati = fmt(s$n.risk)
+)
+knitr::kable(km_table, align = &quot;rrrr&quot;)
+</code></pre>
+<table>
+<thead>
+<tr>
+<th align="right">hari</th>
+<th align="right">repeat_rate</th>
+<th align="right">ci95</th>
+<th align="right">masih_diamati</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="right">14</td>
+<td align="right">0.35%</td>
+<td align="right">0.31% – 0.39%</td>
+<td align="right">94,227</td>
+</tr>
+<tr>
+<td align="right">30</td>
+<td align="right">0.63%</td>
+<td align="right">0.58% – 0.68%</td>
+<td align="right">89,546</td>
+</tr>
+<tr>
+<td align="right">60</td>
+<td align="right">1.00%</td>
+<td align="right">0.93% – 1.06%</td>
+<td align="right">83,267</td>
+</tr>
+<tr>
+<td align="right">90</td>
+<td align="right">1.25%</td>
+<td align="right">1.18% – 1.33%</td>
+<td align="right">77,144</td>
+</tr>
+<tr>
+<td align="right">180</td>
+<td align="right">1.87%</td>
+<td align="right">1.77% – 1.96%</td>
+<td align="right">57,360</td>
+</tr>
+<tr>
+<td align="right">365</td>
+<td align="right">2.96%</td>
+<td align="right">2.81% – 3.10%</td>
+<td align="right">21,913</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-r">p90 &lt;- 1 - summary(km, times = 90)$surv          # baseline untuk power analysis
+</code></pre>
+<pre><code class="language-r">plot(km, fun = &quot;event&quot;, conf.int = TRUE, xlim = c(0, 365), ylim = c(0, 0.05),
+     xlab = &quot;Hari sejak order pertama&quot;, ylab = &quot;Proporsi sudah belanja lagi&quot;,
+     main = &quot;Waktu sampai pembelian kedua (Kaplan–Meier)&quot;, col = &quot;seagreen&quot;, lwd = 2)
+abline(v = 90, lty = 2, col = &quot;gray40&quot;)
+text(95, 0.045, &quot;90 hari&quot;, adj = 0, col = &quot;gray40&quot;)
+</code></pre>
+<p><img src="data:image/png;base64,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" alt="Kurva Kaplan–Meier: proporsi customer baru yang sudah melakukan pembelian kedua" /></p>
+<p><strong>Interpretasi:</strong></p>
+<ul>
+<li>Hanya <strong>1.25%</strong> customer baru yang belanja lagi dalam 90 hari, dan <strong>2.96%</strong> dalam setahun.</li>
+<li>Kurvanya naik paling cepat di bulan pertama, lalu melandai. Artinya <strong>jendela aktivasi ada di minggu-minggu awal</strong> setelah order pertama — mendukung desain voucher yang dikirim D+14, bukan setelah customer “terlihat churn” di hari ke-90.</li>
+</ul>
+<h2 id="sec:2-1-siapa-yang-lebih-cepat-kembali-cox-proportional-hazards">2.1 Siapa yang lebih cepat kembali? (Cox proportional hazards)</h2>
+<p>Karakteristik <strong>order pertama</strong> dipakai sebagai prediktor. Hazard ratio (HR) &gt; 1 berarti customer dengan karakteristik tersebut kembali lebih cepat.</p>
+<pre><code class="language-r">consumable &lt;- c(&quot;health_beauty&quot;, &quot;bed_bath_table&quot;, &quot;housewares&quot;, &quot;perfumery&quot;, &quot;baby&quot;)
+d$category_group &lt;- factor(ifelse(d$product_category_name_english %in% consumable, &quot;habis pakai&quot;,
+                           ifelse(d$product_category_name_english %in% &quot;toys&quot;, &quot;toys&quot;, &quot;lainnya&quot;)),
+                           levels = c(&quot;lainnya&quot;, &quot;habis pakai&quot;, &quot;toys&quot;))
+d$wilayah      &lt;- factor(ifelse(d$customer_state == &quot;SP&quot;, &quot;SP&quot;, &quot;non-SP&quot;), levels = c(&quot;non-SP&quot;, &quot;SP&quot;))
+d$review_group &lt;- factor(ifelse(is.na(d$review_score), &quot;tanpa review&quot;,
+                         ifelse(d$review_score &gt;= 4, &quot;4-5&quot;, &quot;1-3&quot;)),
+                         levels = c(&quot;1-3&quot;, &quot;4-5&quot;, &quot;tanpa review&quot;))
+d$log_payment  &lt;- log1p(d$payment_value)
+d$installments &lt;- pmin(d$payment_installments, 12)
+
+cox &lt;- coxph(Surv(days, event) ~ wilayah + review_group + category_group + log_payment + installments,
+             data = d)
+cs &lt;- summary(cox)$conf.int
+cox_table &lt;- data.frame(
+  variabel = rownames(cs),
+  HR       = round(cs[, &quot;exp(coef)&quot;], 2),
+  ci95     = paste0(round(cs[, &quot;lower .95&quot;], 2), &quot; – &quot;, round(cs[, &quot;upper .95&quot;], 2)),
+  p_value  = signif(summary(cox)$coefficients[, &quot;Pr(&gt;|z|)&quot;], 2),
+  row.names = NULL
+)
+knitr::kable(cox_table, align = &quot;lrrr&quot;)
+</code></pre>
+<table>
+<thead>
+<tr>
+<th align="left">variabel</th>
+<th align="right">HR</th>
+<th align="right">ci95</th>
+<th align="right">p_value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="left">wilayahSP</td>
+<td align="right">1.18</td>
+<td align="right">1.08 – 1.29</td>
+<td align="right">0.000260</td>
+</tr>
+<tr>
+<td align="left">review_group4-5</td>
+<td align="right">1.25</td>
+<td align="right">1.12 – 1.39</td>
+<td align="right">0.000081</td>
+</tr>
+<tr>
+<td align="left">review_grouptanpa review</td>
+<td align="right">1.28</td>
+<td align="right">0.8 – 2.05</td>
+<td align="right">0.310000</td>
+</tr>
+<tr>
+<td align="left">category_grouphabis pakai</td>
+<td align="right">1.06</td>
+<td align="right">0.96 – 1.16</td>
+<td align="right">0.250000</td>
+</tr>
+<tr>
+<td align="left">category_grouptoys</td>
+<td align="right">0.83</td>
+<td align="right">0.66 – 1.05</td>
+<td align="right">0.130000</td>
+</tr>
+<tr>
+<td align="left">log_payment</td>
+<td align="right">0.91</td>
+<td align="right">0.86 – 0.97</td>
+<td align="right">0.003800</td>
+</tr>
+<tr>
+<td align="left">installments</td>
+<td align="right">1.04</td>
+<td align="right">1.03 – 1.06</td>
+<td align="right">0.000001</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-r">cox_zph &lt;- cox.zph(cox)
+</code></pre>
+<pre><code class="language-r">op &lt;- par(mfrow = c(1, 2))
+plot(survfit(Surv(days, event) ~ wilayah, data = d), fun = &quot;event&quot;, xlim = c(0, 365),
+     ylim = c(0, 0.05), col = c(&quot;darkorange&quot;, &quot;steelblue&quot;), lwd = 2,
+     xlab = &quot;Hari&quot;, ylab = &quot;Proporsi sudah belanja lagi&quot;, main = &quot;Wilayah&quot;)
+legend(&quot;topleft&quot;, c(&quot;non-SP&quot;, &quot;SP&quot;), col = c(&quot;darkorange&quot;, &quot;steelblue&quot;), lwd = 2, bty = &quot;n&quot;)
+plot(survfit(Surv(days, event) ~ category_group, data = d), fun = &quot;event&quot;, xlim = c(0, 365),
+     ylim = c(0, 0.05), col = c(&quot;gray50&quot;, &quot;seagreen&quot;, &quot;tomato&quot;), lwd = 2,
+     xlab = &quot;Hari&quot;, ylab = &quot;&quot;, main = &quot;Kategori order pertama&quot;)
+legend(&quot;topleft&quot;, levels(d$category_group), col = c(&quot;gray50&quot;, &quot;seagreen&quot;, &quot;tomato&quot;), lwd = 2, bty = &quot;n&quot;)
+</code></pre>
+<p><img src="data:image/png;base64,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" alt="plot of chunk km-segments" /></p>
+<pre><code class="language-r">par(op)
+</code></pre>
+<p><strong>Interpretasi Cox:</strong></p>
+<ul>
+<li><strong>Customer SP</strong> kembali 18% lebih cepat dari non-SP (HR 1.18) — konsisten dengan temuan NB02 dan NB06.</li>
+<li><strong>Review order pertama 4–5</strong> dibanding 1–3: HR 1.25. Pengalaman pertama yang baik berasosiasi dengan kembalinya customer — sinyal yang hampir tidak terlihat di desain churn lama.</li>
+<li><strong>Setiap cicilan tambahan</strong> menaikkan hazard ~4% (HR 1.04), sedangkan <strong>nilai order pertama yang lebih tinggi</strong> justru menurunkannya (HR 0.91 per kenaikan 1 unit log) — pembeli barang mahal cenderung pembelian sekali.</li>
+<li><strong>Kategori</strong> (habis pakai HR 1.06, toys HR 0.83) tidak signifikan setelah faktor lain dikontrol.</li>
+<li>Semua efek ini <strong>asosiasi</strong>, bukan sebab-akibat — berguna untuk stratifikasi eksperimen (misalnya acak terpisah untuk SP dan non-SP), bukan sebagai bukti bahwa mengubah faktor tersebut akan menaikkan repeat purchase.</li>
+</ul>
+<p><strong>Uji asumsi proportional hazards</strong> (global p = 0.042): asumsi tidak sepenuhnya terpenuhi — HR sebaiknya dibaca sebagai rata-rata efek sepanjang waktu, bukan efek konstan.</p>
+<blockquote>
+<p>Catatan: review ditulis rata-rata ~10 hari setelah order, sehingga untuk sebagian kecil customer review order pertama baru ada setelah mereka kembali. Variabel review dipakai untuk deskripsi segmen, bukan untuk targeting di hari pertama.</p>
+</blockquote>
+<h1 id="chp:3-power-analysis-berapa-customer-yang-dibutuhkan">3. Power analysis: berapa customer yang dibutuhkan?</h1>
+<p><strong>Desain eksperimen yang diusulkan:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Komponen</th>
+<th>Pilihan</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Populasi</td>
+<td>Customer baru, diacak saat order pertama</td>
+</tr>
+<tr>
+<td>Treatment</td>
+<td>Voucher 15% untuk order kedua, dikirim D+14</td>
+</tr>
+<tr>
+<td>Kontrol</td>
+<td>Tanpa voucher</td>
+</tr>
+<tr>
+<td>Metrik utama</td>
+<td>Proporsi customer yang order lagi dalam 90 hari (≥ 1 hari setelah order pertama)</td>
+</tr>
+<tr>
+<td>Uji statistik</td>
+<td>Two-proportion z-test, two-sided, α = 0.05, power 80%</td>
+</tr>
+<tr>
+<td>Guardrail</td>
+<td>Nilai order kedua, cancellation rate, review score</td>
+</tr>
+</tbody>
+</table>
+<p>Baseline metrik utama = <strong>1.25%</strong> (Kaplan–Meier, 90 hari). Dengan baseline sekecil ini, efek relatif yang terlihat besar pun berarti selisih absolut yang sangat kecil.</p>
+<pre><code class="language-r">new_per_month &lt;- as.numeric(table(format(first$ts[first$ts &gt;= as.POSIXct(&quot;2017-09-01&quot;, tz = &quot;UTC&quot;)], &quot;%Y-%m&quot;)))
+monthly_new &lt;- median(new_per_month)
+
+lifts &lt;- c(0.10, 0.20, 0.30, 0.50, 1.00)
+power_table &lt;- do.call(rbind, lapply(lifts, function(l) {
+  p1 &lt;- p90; p2 &lt;- p90 * (1 + l)
+  n  &lt;- ceiling(pwr.2p.test(h = ES.h(p2, p1), sig.level = 0.05, power = 0.80)$n)
+  data.frame(
+    lift_relatif      = paste0(&quot;+&quot;, l * 100, &quot;%&quot;),
+    rate_treatment    = pct(p2),
+    selisih_absolut   = paste0(&quot;+&quot;, round(100 * (p2 - p1), 2), &quot; pp&quot;),
+    n_per_grup        = fmt(n),
+    total_customer    = fmt(2 * n),
+    bulan_rekrutmen   = round(2 * n / monthly_new, 1)
+  )
+}))
+knitr::kable(power_table, align = &quot;lrrrrr&quot;)
+</code></pre>
+<table>
+<thead>
+<tr>
+<th align="left">lift_relatif</th>
+<th align="right">rate_treatment</th>
+<th align="right">selisih_absolut</th>
+<th align="right">n_per_grup</th>
+<th align="right">total_customer</th>
+<th align="right">bulan_rekrutmen</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="left">+10%</td>
+<td align="right">1.38%</td>
+<td align="right">+0.13 pp</td>
+<td align="right">129,648</td>
+<td align="right">259,296</td>
+<td align="right">40.8</td>
+</tr>
+<tr>
+<td align="left">+20%</td>
+<td align="right">1.50%</td>
+<td align="right">+0.25 pp</td>
+<td align="right">33,884</td>
+<td align="right">67,768</td>
+<td align="right">10.7</td>
+</tr>
+<tr>
+<td align="left">+30%</td>
+<td align="right">1.63%</td>
+<td align="right">+0.38 pp</td>
+<td align="right">15,700</td>
+<td align="right">31,400</td>
+<td align="right">4.9</td>
+</tr>
+<tr>
+<td align="left">+50%</td>
+<td align="right">1.88%</td>
+<td align="right">+0.63 pp</td>
+<td align="right">6,100</td>
+<td align="right">12,200</td>
+<td align="right">1.9</td>
+</tr>
+<tr>
+<td align="left">+100%</td>
+<td align="right">2.51%</td>
+<td align="right">+1.25 pp</td>
+<td align="right">1,791</td>
+<td align="right">3,582</td>
+<td align="right">0.6</td>
+</tr>
+</tbody>
+</table>
+<p>Customer baru per bulan (median Sep 2017 – Agu 2018): <strong>6,361</strong>. Durasi total eksperimen = bulan rekrutmen <strong>+ 3 bulan observasi</strong> (jendela 90 hari untuk customer terakhir yang masuk).</p>
+<pre><code class="language-r"># Sebaliknya: dengan rekrutmen 3 bulan, efek terkecil yang bisa dideteksi?
+n_3m &lt;- floor(3 * monthly_new / 2)
+h_3m &lt;- pwr.2p.test(n = n_3m, sig.level = 0.05, power = 0.80)$h
+p2_3m &lt;- sin(asin(sqrt(p90)) + h_3m / 2)^2
+c(n_per_grup = n_3m, mde_rate = round(100 * p2_3m, 2), mde_relatif_pct = round(100 * (p2_3m / p90 - 1)))
+</code></pre>
+<pre><code>##      n_per_grup        mde_rate mde_relatif_pct 
+##         9541.00            1.75           39.00
+</code></pre>
+<p><strong>Interpretasi:</strong></p>
+<ul>
+<li>Untuk mendeteksi kenaikan relatif <strong>20%</strong> (1.25% → 1.50%), dibutuhkan sekitar <strong>67,768 customer</strong> — kurang lebih <strong>10.7 bulan</strong> rekrutmen customer baru, ditambah 3 bulan observasi.</li>
+<li>Dengan rekrutmen realistis <strong>3 bulan</strong>, eksperimen hanya bisa mendeteksi kenaikan relatif sekitar <strong>39%</strong> atau lebih. Efek yang lebih kecil dari itu kemungkinan besar tidak akan terlihat signifikan walaupun sebenarnya ada.</li>
+<li><strong>Implikasi untuk stakeholder:</strong> sebelum eksperimen dimulai, tim harus sepakat bahwa voucher baru layak dilanjutkan jika efeknya cukup besar (misalnya ≥ +50%). Jika efek yang diharapkan lebih kecil, pilihannya adalah eksperimen yang lebih lama, insentif yang lebih kuat, atau metrik yang lebih sensitif (misalnya repeat dalam 180 hari, dengan konsekuensi hasil lebih lambat).</li>
+</ul>
+<h1 id="chp:4-break-even-kapan-voucher-menguntungkan">4. Break-even: kapan voucher menguntungkan?</h1>
+<p>Voucher punya dua jenis biaya:</p>
+<ol>
+<li>Diskon untuk customer yang <strong>memang akan kembali tanpa voucher</strong> (baseline 1.25%) — ini biaya murni</li>
+<li>Diskon untuk customer <strong>tambahan</strong> yang kembali karena voucher</li>
+</ol>
+<p>Asumsi (eksplisit, bisa diganti):</p>
+<pre><code class="language-r">aov      &lt;- median(d$payment_value[d$event == 1 &amp; !is.na(d$payment_value)])  # nilai order pertama repeater
+discount &lt;- 0.15
+margins  &lt;- c(0.10, 0.20, 0.30)
+c(aov_brl = round(aov, 2), diskon_per_redeem_brl = round(discount * aov, 2))
+</code></pre>
+<pre><code>##               aov_brl diskon_per_redeem_brl 
+##                105.28                 15.79
+</code></pre>
+<p>Per customer yang diberi voucher, dengan rate kembali di grup treatment = p₁ dan kontrol = p₀:</p>
+<ul>
+<li>Keuntungan tambahan = margin × (p₁ − p₀) × AOV</li>
+<li>Biaya diskon = p₁ × diskon × AOV</li>
+</ul>
+<p>Program impas jika margin × (p₁ − p₀) ≥ p₁ × diskon, sehingga <strong>lift relatif minimum = diskon / (margin − diskon)</strong> (hanya mungkin jika margin &gt; diskon).</p>
+<pre><code class="language-r">be &lt;- data.frame(
+  margin_kontribusi = paste0(margins * 100, &quot;%&quot;),
+  lift_minimum      = ifelse(margins &gt; discount,
+                             paste0(&quot;+&quot;, round(100 * discount / (margins - discount)), &quot;%&quot;),
+                             &quot;tidak pernah impas&quot;)
+)
+knitr::kable(be, align = &quot;lr&quot;)
+</code></pre>
+<table>
+<thead>
+<tr>
+<th align="left">margin_kontribusi</th>
+<th align="right">lift_minimum</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="left">10%</td>
+<td align="right">tidak pernah impas</td>
+</tr>
+<tr>
+<td align="left">20%</td>
+<td align="right">+300%</td>
+</tr>
+<tr>
+<td align="left">30%</td>
+<td align="right">+100%</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Interpretasi:</strong></p>
+<ul>
+<li>Dengan diskon 15%, voucher <strong>tidak akan pernah impas</strong> jika margin kontribusi ≤ 15%, berapa pun kenaikan repeat rate-nya.</li>
+<li>Pada margin 30%, voucher baru impas jika repeat rate naik <strong>≥ 100%</strong> (dua kali lipat). Ini jauh di atas efek yang biasanya dihasilkan voucher.</li>
+<li><strong>Rekomendasi desain:</strong> turunkan diskon (misalnya 5–10%) atau ganti dengan insentif yang biayanya hanya muncul saat customer benar-benar kembali (misalnya gratis ongkir untuk order kedua), lalu uji <strong>dua varian</strong> sekaligus terhadap kontrol. Power analysis di atas berlaku per perbandingan; dengan dua treatment, gunakan koreksi Bonferroni (α = 0.025).</li>
+</ul>
+<h1 id="chp:5-kesimpulan">5. Kesimpulan</h1>
+<table>
+<thead>
+<tr>
+<th>Pertanyaan</th>
+<th>Jawaban</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Baseline repeat 90 hari (customer baru)</td>
+<td><strong>1.25%</strong> (Kaplan–Meier, order hari yang sama tidak dihitung)</td>
+</tr>
+<tr>
+<td>Kapan customer kembali</td>
+<td>Paling banyak di 30 hari pertama → kirim insentif di minggu kedua</td>
+</tr>
+<tr>
+<td>Siapa yang lebih cepat kembali</td>
+<td>Customer SP (HR 1.18), review pertama 4–5 (HR 1.25), lebih banyak cicilan; order pertama bernilai tinggi lebih jarang kembali</td>
+</tr>
+<tr>
+<td>Sampel untuk deteksi +20%</td>
+<td><strong>67,768</strong> customer (~10.7 bulan rekrutmen)</td>
+</tr>
+<tr>
+<td>Efek minimum dengan rekrutmen 3 bulan</td>
+<td><strong>+39%</strong> relatif</td>
+</tr>
+<tr>
+<td>Kapan voucher 15% impas</td>
+<td>Margin &gt; 15%, dan lift ≥ +100% pada margin 30%</td>
+</tr>
+</tbody>
+</table>
+<p>Pesan utama untuk stakeholder: <strong>eksperimen ini layak dijalankan, tetapi hanya untuk menguji efek yang besar.</strong> Desain insentif (besaran diskon, jenis insentif) sama pentingnya dengan desain eksperimen — voucher 15% di repeat rate ~1% kemungkinan besar merugi meskipun “berhasil” menaikkan repeat purchase.</p>
+<hr />
+<p><em>Session info: R version 4.6.2 (2026-10-29 ucrt); survival 3.8.12; pwr 1.3.0.</em></p>
+
+</article>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+</body>
+</html>

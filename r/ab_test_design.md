@@ -1,0 +1,327 @@
+---
+title: "Desain A/B Test — Voucher Second Purchase"
+subtitle: "Survival analysis & power analysis di R · Olist Brazilian E-Commerce"
+author: "Farah Aulia Kirana"
+---
+
+
+
+# Ringkasan
+
+Analisis Python (NB06) menunjukkan masalah utama Olist adalah **aktivasi**: hampir semua customer hanya belanja sekali. Rekomendasi bisnis yang paling berdasar adalah **voucher untuk pembelian kedua** — tetapi efeknya harus dibuktikan dengan eksperimen, bukan diasumsikan.
+
+Dokumen ini menjawab tiga pertanyaan yang harus dijawab **sebelum** eksperimen dijalankan:
+
+1. **Berapa baseline-nya?** Seberapa sering customer baru belanja lagi, dan kapan? → *survival analysis* (Kaplan–Meier & Cox)
+2. **Berapa customer yang dibutuhkan, dan berapa lama?** → *power analysis*
+3. **Kapan program ini menguntungkan?** → *break-even analysis*
+
+> Data: `data/processed/master.csv` (output NB01 / `train_pipeline.py`). Data order praktis berhenti akhir Agustus 2018, sehingga observasi dipotong (*censored*) di 1 September 2018. Dokumen ini dirender dengan `Rscript r/render.R`.
+
+# 1. Data: waktu sampai pembelian kedua
+
+
+``` r
+m <- read.csv("../data/processed/master.csv", stringsAsFactors = FALSE)
+m$ts <- as.POSIXct(m$order_purchase_timestamp, tz = "UTC")
+data_end <- as.POSIXct("2018-09-01", tz = "UTC")
+
+# Satu baris per order (master.csv ber-grain item), hanya order sebelum data_end
+o <- m[!duplicated(m$order_id) & m$ts < data_end, ]
+o <- o[order(o$customer_unique_id, o$ts), ]
+o$rank <- ave(as.numeric(o$ts), o$customer_unique_id,
+              FUN = function(x) rank(x, ties.method = "first"))
+
+first  <- o[o$rank == 1, ]
+second <- setNames(o[o$rank == 2, c("customer_unique_id", "ts")],
+                   c("customer_unique_id", "ts2"))
+d <- merge(first, second, by = "customer_unique_id", all.x = TRUE)
+
+d$gap_days <- as.numeric(difftime(d$ts2, d$ts, units = "days"))
+d$same_day <- !is.na(d$gap_days) & d$gap_days < 1
+
+# Event = pembelian kedua minimal 1 hari setelah order pertama.
+# Order kedua di hari yang sama diperlakukan sebagai satu belanjaan yang dipecah.
+d$event <- as.integer(!is.na(d$gap_days) & d$gap_days >= 1)
+d$days  <- ifelse(d$event == 1, d$gap_days,
+                  as.numeric(difftime(data_end, d$ts, units = "days")))
+
+c(customers          = nrow(d),
+  second_order_any   = sum(!is.na(d$gap_days)),
+  second_same_day    = sum(d$same_day),
+  second_order_event = sum(d$event))
+```
+
+```
+##          customers   second_order_any    second_same_day second_order_event 
+##              96090               2987                927               2060
+```
+
+**Temuan data:** dari 2,987 customer yang punya order kedua, **927 (31%) terjadi di hari yang sama** dengan order pertama. Ini kemungkinan besar satu sesi belanja yang dipecah menjadi beberapa order (misalnya karena beda seller), bukan customer yang "kembali". Jika dihitung sebagai repeat purchase, baseline akan terlihat hampir 2× lebih tinggi dari kenyataan — dan ukuran sampel eksperimen akan terlalu kecil.
+
+# 2. Survival analysis: kapan customer kembali?
+
+Kaplan–Meier dipakai karena sebagian besar customer **belum selesai diamati**: customer yang order pertamanya Juli 2018 baru diamati ~2 bulan. Menghitung "persentase yang kembali" secara naif akan meremehkan repeat rate untuk customer baru. Kaplan–Meier menangani ini dengan *right-censoring*.
+
+
+``` r
+km <- survfit(Surv(days, event) ~ 1, data = d)
+horizons <- c(14, 30, 60, 90, 180, 365)
+s <- summary(km, times = horizons)
+km_table <- data.frame(
+  hari          = s$time,
+  repeat_rate   = pct(1 - s$surv),
+  ci95          = paste0(pct(1 - s$upper), " – ", pct(1 - s$lower)),
+  masih_diamati = fmt(s$n.risk)
+)
+knitr::kable(km_table, align = "rrrr")
+```
+
+
+
+| hari| repeat_rate|          ci95| masih_diamati|
+|----:|-----------:|-------------:|-------------:|
+|   14|       0.35%| 0.31% – 0.39%|        94,227|
+|   30|       0.63%| 0.58% – 0.68%|        89,546|
+|   60|       1.00%| 0.93% – 1.06%|        83,267|
+|   90|       1.25%| 1.18% – 1.33%|        77,144|
+|  180|       1.87%| 1.77% – 1.96%|        57,360|
+|  365|       2.96%| 2.81% – 3.10%|        21,913|
+
+``` r
+p90 <- 1 - summary(km, times = 90)$surv          # baseline untuk power analysis
+```
+
+
+``` r
+plot(km, fun = "event", conf.int = TRUE, xlim = c(0, 365), ylim = c(0, 0.05),
+     xlab = "Hari sejak order pertama", ylab = "Proporsi sudah belanja lagi",
+     main = "Waktu sampai pembelian kedua (Kaplan–Meier)", col = "seagreen", lwd = 2)
+abline(v = 90, lty = 2, col = "gray40")
+text(95, 0.045, "90 hari", adj = 0, col = "gray40")
+```
+
+![Kurva Kaplan–Meier: proporsi customer baru yang sudah melakukan pembelian kedua](figures/km-plot-1.png)
+
+**Interpretasi:**
+
+- Hanya **1.25%** customer baru yang belanja lagi dalam 90 hari, dan **2.96%** dalam setahun.
+- Kurvanya naik paling cepat di bulan pertama, lalu melandai. Artinya **jendela aktivasi ada di minggu-minggu awal** setelah order pertama — mendukung desain voucher yang dikirim D+14, bukan setelah customer "terlihat churn" di hari ke-90.
+
+## 2.1 Siapa yang lebih cepat kembali? (Cox proportional hazards)
+
+Karakteristik **order pertama** dipakai sebagai prediktor. Hazard ratio (HR) > 1 berarti customer dengan karakteristik tersebut kembali lebih cepat.
+
+
+``` r
+consumable <- c("health_beauty", "bed_bath_table", "housewares", "perfumery", "baby")
+d$category_group <- factor(ifelse(d$product_category_name_english %in% consumable, "habis pakai",
+                           ifelse(d$product_category_name_english %in% "toys", "toys", "lainnya")),
+                           levels = c("lainnya", "habis pakai", "toys"))
+d$wilayah      <- factor(ifelse(d$customer_state == "SP", "SP", "non-SP"), levels = c("non-SP", "SP"))
+d$review_group <- factor(ifelse(is.na(d$review_score), "tanpa review",
+                         ifelse(d$review_score >= 4, "4-5", "1-3")),
+                         levels = c("1-3", "4-5", "tanpa review"))
+d$log_payment  <- log1p(d$payment_value)
+d$installments <- pmin(d$payment_installments, 12)
+
+cox <- coxph(Surv(days, event) ~ wilayah + review_group + category_group + log_payment + installments,
+             data = d)
+cs <- summary(cox)$conf.int
+cox_table <- data.frame(
+  variabel = rownames(cs),
+  HR       = round(cs[, "exp(coef)"], 2),
+  ci95     = paste0(round(cs[, "lower .95"], 2), " – ", round(cs[, "upper .95"], 2)),
+  p_value  = signif(summary(cox)$coefficients[, "Pr(>|z|)"], 2),
+  row.names = NULL
+)
+knitr::kable(cox_table, align = "lrrr")
+```
+
+
+
+|variabel                  |   HR|        ci95|  p_value|
+|:-------------------------|----:|-----------:|--------:|
+|wilayahSP                 | 1.18| 1.08 – 1.29| 0.000260|
+|review_group4-5           | 1.25| 1.12 – 1.39| 0.000081|
+|review_grouptanpa review  | 1.28|  0.8 – 2.05| 0.310000|
+|category_grouphabis pakai | 1.06| 0.96 – 1.16| 0.250000|
+|category_grouptoys        | 0.83| 0.66 – 1.05| 0.130000|
+|log_payment               | 0.91| 0.86 – 0.97| 0.003800|
+|installments              | 1.04| 1.03 – 1.06| 0.000001|
+
+``` r
+cox_zph <- cox.zph(cox)
+```
+
+
+``` r
+op <- par(mfrow = c(1, 2))
+plot(survfit(Surv(days, event) ~ wilayah, data = d), fun = "event", xlim = c(0, 365),
+     ylim = c(0, 0.05), col = c("darkorange", "steelblue"), lwd = 2,
+     xlab = "Hari", ylab = "Proporsi sudah belanja lagi", main = "Wilayah")
+legend("topleft", c("non-SP", "SP"), col = c("darkorange", "steelblue"), lwd = 2, bty = "n")
+plot(survfit(Surv(days, event) ~ category_group, data = d), fun = "event", xlim = c(0, 365),
+     ylim = c(0, 0.05), col = c("gray50", "seagreen", "tomato"), lwd = 2,
+     xlab = "Hari", ylab = "", main = "Kategori order pertama")
+legend("topleft", levels(d$category_group), col = c("gray50", "seagreen", "tomato"), lwd = 2, bty = "n")
+```
+
+![plot of chunk km-segments](figures/km-segments-1.png)
+
+``` r
+par(op)
+```
+
+
+
+**Interpretasi Cox:**
+
+- **Customer SP** kembali 18% lebih cepat dari non-SP (HR 1.18) — konsisten dengan temuan NB02 dan NB06.
+- **Review order pertama 4–5** dibanding 1–3: HR 1.25. Pengalaman pertama yang baik berasosiasi dengan kembalinya customer — sinyal yang hampir tidak terlihat di desain churn lama.
+- **Setiap cicilan tambahan** menaikkan hazard ~4% (HR 1.04), sedangkan **nilai order pertama yang lebih tinggi** justru menurunkannya (HR 0.91 per kenaikan 1 unit log) — pembeli barang mahal cenderung pembelian sekali.
+- **Kategori** (habis pakai HR 1.06, toys HR 0.83) tidak signifikan setelah faktor lain dikontrol.
+- Semua efek ini **asosiasi**, bukan sebab-akibat — berguna untuk stratifikasi eksperimen (misalnya acak terpisah untuk SP dan non-SP), bukan sebagai bukti bahwa mengubah faktor tersebut akan menaikkan repeat purchase.
+
+**Uji asumsi proportional hazards** (global p = 0.042): asumsi tidak sepenuhnya terpenuhi — HR sebaiknya dibaca sebagai rata-rata efek sepanjang waktu, bukan efek konstan.
+
+> Catatan: review ditulis rata-rata ~10 hari setelah order, sehingga untuk sebagian kecil customer review order pertama baru ada setelah mereka kembali. Variabel review dipakai untuk deskripsi segmen, bukan untuk targeting di hari pertama.
+
+# 3. Power analysis: berapa customer yang dibutuhkan?
+
+**Desain eksperimen yang diusulkan:**
+
+| Komponen | Pilihan |
+|---|---|
+| Populasi | Customer baru, diacak saat order pertama |
+| Treatment | Voucher 15% untuk order kedua, dikirim D+14 |
+| Kontrol | Tanpa voucher |
+| Metrik utama | Proporsi customer yang order lagi dalam 90 hari (≥ 1 hari setelah order pertama) |
+| Uji statistik | Two-proportion z-test, two-sided, α = 0.05, power 80% |
+| Guardrail | Nilai order kedua, cancellation rate, review score |
+
+Baseline metrik utama = **1.25%** (Kaplan–Meier, 90 hari). Dengan baseline sekecil ini, efek relatif yang terlihat besar pun berarti selisih absolut yang sangat kecil.
+
+
+``` r
+new_per_month <- as.numeric(table(format(first$ts[first$ts >= as.POSIXct("2017-09-01", tz = "UTC")], "%Y-%m")))
+monthly_new <- median(new_per_month)
+
+lifts <- c(0.10, 0.20, 0.30, 0.50, 1.00)
+power_table <- do.call(rbind, lapply(lifts, function(l) {
+  p1 <- p90; p2 <- p90 * (1 + l)
+  n  <- ceiling(pwr.2p.test(h = ES.h(p2, p1), sig.level = 0.05, power = 0.80)$n)
+  data.frame(
+    lift_relatif      = paste0("+", l * 100, "%"),
+    rate_treatment    = pct(p2),
+    selisih_absolut   = paste0("+", round(100 * (p2 - p1), 2), " pp"),
+    n_per_grup        = fmt(n),
+    total_customer    = fmt(2 * n),
+    bulan_rekrutmen   = round(2 * n / monthly_new, 1)
+  )
+}))
+knitr::kable(power_table, align = "lrrrrr")
+```
+
+
+
+|lift_relatif | rate_treatment| selisih_absolut| n_per_grup| total_customer| bulan_rekrutmen|
+|:------------|--------------:|---------------:|----------:|--------------:|---------------:|
+|+10%         |          1.38%|        +0.13 pp|    129,648|        259,296|            40.8|
+|+20%         |          1.50%|        +0.25 pp|     33,884|         67,768|            10.7|
+|+30%         |          1.63%|        +0.38 pp|     15,700|         31,400|             4.9|
+|+50%         |          1.88%|        +0.63 pp|      6,100|         12,200|             1.9|
+|+100%        |          2.51%|        +1.25 pp|      1,791|          3,582|             0.6|
+
+Customer baru per bulan (median Sep 2017 – Agu 2018): **6,361**. Durasi total eksperimen = bulan rekrutmen **+ 3 bulan observasi** (jendela 90 hari untuk customer terakhir yang masuk).
+
+
+``` r
+# Sebaliknya: dengan rekrutmen 3 bulan, efek terkecil yang bisa dideteksi?
+n_3m <- floor(3 * monthly_new / 2)
+h_3m <- pwr.2p.test(n = n_3m, sig.level = 0.05, power = 0.80)$h
+p2_3m <- sin(asin(sqrt(p90)) + h_3m / 2)^2
+c(n_per_grup = n_3m, mde_rate = round(100 * p2_3m, 2), mde_relatif_pct = round(100 * (p2_3m / p90 - 1)))
+```
+
+```
+##      n_per_grup        mde_rate mde_relatif_pct 
+##         9541.00            1.75           39.00
+```
+
+**Interpretasi:**
+
+- Untuk mendeteksi kenaikan relatif **20%** (1.25% → 1.50%), dibutuhkan sekitar **67,768 customer** — kurang lebih **10.7 bulan** rekrutmen customer baru, ditambah 3 bulan observasi.
+- Dengan rekrutmen realistis **3 bulan**, eksperimen hanya bisa mendeteksi kenaikan relatif sekitar **39%** atau lebih. Efek yang lebih kecil dari itu kemungkinan besar tidak akan terlihat signifikan walaupun sebenarnya ada.
+- **Implikasi untuk stakeholder:** sebelum eksperimen dimulai, tim harus sepakat bahwa voucher baru layak dilanjutkan jika efeknya cukup besar (misalnya ≥ +50%). Jika efek yang diharapkan lebih kecil, pilihannya adalah eksperimen yang lebih lama, insentif yang lebih kuat, atau metrik yang lebih sensitif (misalnya repeat dalam 180 hari, dengan konsekuensi hasil lebih lambat).
+
+# 4. Break-even: kapan voucher menguntungkan?
+
+Voucher punya dua jenis biaya:
+
+1. Diskon untuk customer yang **memang akan kembali tanpa voucher** (baseline 1.25%) — ini biaya murni
+2. Diskon untuk customer **tambahan** yang kembali karena voucher
+
+Asumsi (eksplisit, bisa diganti):
+
+
+``` r
+aov      <- median(d$payment_value[d$event == 1 & !is.na(d$payment_value)])  # nilai order pertama repeater
+discount <- 0.15
+margins  <- c(0.10, 0.20, 0.30)
+c(aov_brl = round(aov, 2), diskon_per_redeem_brl = round(discount * aov, 2))
+```
+
+```
+##               aov_brl diskon_per_redeem_brl 
+##                105.28                 15.79
+```
+
+Per customer yang diberi voucher, dengan rate kembali di grup treatment = p₁ dan kontrol = p₀:
+
+- Keuntungan tambahan = margin × (p₁ − p₀) × AOV
+- Biaya diskon = p₁ × diskon × AOV
+
+Program impas jika margin × (p₁ − p₀) ≥ p₁ × diskon, sehingga **lift relatif minimum = diskon / (margin − diskon)** (hanya mungkin jika margin > diskon).
+
+
+``` r
+be <- data.frame(
+  margin_kontribusi = paste0(margins * 100, "%"),
+  lift_minimum      = ifelse(margins > discount,
+                             paste0("+", round(100 * discount / (margins - discount)), "%"),
+                             "tidak pernah impas")
+)
+knitr::kable(be, align = "lr")
+```
+
+
+
+|margin_kontribusi |       lift_minimum|
+|:-----------------|------------------:|
+|10%               | tidak pernah impas|
+|20%               |              +300%|
+|30%               |              +100%|
+
+**Interpretasi:**
+
+- Dengan diskon 15%, voucher **tidak akan pernah impas** jika margin kontribusi ≤ 15%, berapa pun kenaikan repeat rate-nya.
+- Pada margin 30%, voucher baru impas jika repeat rate naik **≥ 100%** (dua kali lipat). Ini jauh di atas efek yang biasanya dihasilkan voucher.
+- **Rekomendasi desain:** turunkan diskon (misalnya 5–10%) atau ganti dengan insentif yang biayanya hanya muncul saat customer benar-benar kembali (misalnya gratis ongkir untuk order kedua), lalu uji **dua varian** sekaligus terhadap kontrol. Power analysis di atas berlaku per perbandingan; dengan dua treatment, gunakan koreksi Bonferroni (α = 0.025).
+
+# 5. Kesimpulan
+
+| Pertanyaan | Jawaban |
+|---|---|
+| Baseline repeat 90 hari (customer baru) | **1.25%** (Kaplan–Meier, order hari yang sama tidak dihitung) |
+| Kapan customer kembali | Paling banyak di 30 hari pertama → kirim insentif di minggu kedua |
+| Siapa yang lebih cepat kembali | Customer SP (HR 1.18), review pertama 4–5 (HR 1.25), lebih banyak cicilan; order pertama bernilai tinggi lebih jarang kembali |
+| Sampel untuk deteksi +20% | **67,768** customer (~10.7 bulan rekrutmen) |
+| Efek minimum dengan rekrutmen 3 bulan | **+39%** relatif |
+| Kapan voucher 15% impas | Margin > 15%, dan lift ≥ +100% pada margin 30% |
+
+Pesan utama untuk stakeholder: **eksperimen ini layak dijalankan, tetapi hanya untuk menguji efek yang besar.** Desain insentif (besaran diskon, jenis insentif) sama pentingnya dengan desain eksperimen — voucher 15% di repeat rate ~1% kemungkinan besar merugi meskipun "berhasil" menaikkan repeat purchase.
+
+---
+
+*Session info: R version 4.6.2 (2026-10-29 ucrt); survival 3.8.12; pwr 1.3.0.*

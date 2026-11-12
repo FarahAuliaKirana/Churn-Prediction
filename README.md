@@ -47,6 +47,21 @@ Sumber: `outputs/backtest_snapshot.csv` (`python train_snapshot_pipeline.py --ba
 - Jun 2018 ternyata periode terbaik XGBoost — hanya melihat satu test snapshot akan melebih-lebihkan keunggulannya
 - **RFM Logistic Regression direkomendasikan** sebagai model produksi: setara atau lebih baik dari XGBoost di semua periode, lebih stabil, dan interpretable
 
+### Desain A/B Test Voucher Second Purchase (R) · [`r/ab_test_design.md`](r/ab_test_design.md)
+
+Survival analysis dan power analysis di R untuk menyiapkan eksperimen voucher **sebelum** dijalankan. Render ulang dengan `Rscript r/render.R` (package: `survival`, `pwr`, `knitr`, `markdown`).
+
+| Pertanyaan | Jawaban |
+|---|---|
+| Baseline repeat 90 hari customer baru | **1.25%** (Kaplan–Meier; 31% "order kedua" ternyata di hari yang sama dan tidak dihitung) |
+| Kapan customer kembali | Paling banyak di 30 hari pertama → insentif dikirim di minggu kedua |
+| Siapa yang lebih cepat kembali (Cox) | SP (HR 1.18), review pertama 4–5 (HR 1.25), lebih banyak cicilan; order pertama bernilai tinggi lebih jarang kembali |
+| Sampel untuk deteksi kenaikan +20% | **67,768 customer** (~10.7 bulan rekrutmen customer baru) |
+| Efek minimum dengan rekrutmen 3 bulan | **+39%** relatif |
+| Kapan voucher 15% impas | Hanya jika margin > 15%; pada margin 30% butuh repeat rate naik ≥ 100% |
+
+Pesan untuk stakeholder: eksperimen layak dijalankan **hanya untuk menguji efek besar**, dan besaran insentif harus diturunkan (atau diganti insentif yang biayanya muncul saat customer benar-benar kembali) agar program tidak merugi.
+
 ### v1 — Churn (desain lama) · `train_pipeline.py` · NB02–NB04
 
 Semua angka di bawah dihasilkan oleh `train_pipeline.py` (sumber: `outputs/metrics.json`) pada **test set 20% yang tidak dipakai untuk training maupun pemilihan threshold**.
@@ -84,6 +99,11 @@ olist-churn-prediction/
 |   ├── 📓 04_modeling.ipynb              # Benchmark, leakage fix, SHAP, threshold, lift, uji placebo
 |   ├── 📓 05_final_report.ipynb          # Ringkasan eksekutif ← baca ini dulu
 |   └── 📓 06_snapshot_redesign.ipynb     # v2: label snapshot, out-of-time test, uji signifikansi
+│
+├── r/
+│   ├── ab_test_design.Rmd            # Survival + power analysis + break-even (R)
+│   ├── ab_test_design.md / .html     # Hasil render (md tampil langsung di GitHub)
+│   └── render.R                      # Rscript r/render.R
 │
 ├── train_pipeline.py                 # CLI training v1 (churn) — dipakai API
 ├── train_snapshot_pipeline.py        # CLI training v2 (repeat purchase, snapshot)
@@ -343,7 +363,7 @@ Dengan base rate churn 89.9%, lift churn maksimum yang mungkin hanya 1/0.899 ≈
 Rekomendasi diurutkan berdasarkan kekuatan bukti. Detail lengkap ada di NB05.
 
 **Prioritas 1 — Second Purchase Activation (bukti kuat)**
-Voucher 15% untuk order kedua, dikirim D+14 setelah first order, dengan holdout group 50%. 96.9% customer tidak pernah kembali untuk kali kedua — masalah utamanya activation, bukan retention.
+Insentif untuk order kedua, dikirim D+14 setelah first order, dengan holdout group 50%. 96.9% customer tidak pernah kembali untuk kali kedua — masalah utamanya activation, bukan retention. Desain eksperimennya (ukuran sampel, durasi, break-even) ada di [`r/ab_test_design.md`](r/ab_test_design.md): voucher 15% kemungkinan merugi pada repeat rate ~1.25%, sehingga besaran insentif perlu diturunkan atau diuji dalam beberapa varian.
 
 **Prioritas 2 — Free Shipping sebagai Eksperimen (bukti lemah)**
 EDA dan SHAP **tidak** menunjukkan ongkir tinggi menaikkan churn. Program gratis ongkir boleh diuji lewat A/B test (metrik: repeat purchase rate 90 hari dan biaya subsidi per customer yang kembali), tetapi tidak boleh diasumsikan berhasil.
@@ -381,6 +401,7 @@ Skenario ukuran dampak (gross, 1 order tambahan per customer yang kembali, rata-
 | fastapi | ≥ 0.100.0 | REST API serving |
 | uvicorn | ≥ 0.22.0 | ASGI server |
 | pydantic | ≥ 2.0.0 | Request/response validation |
+| R | 4.x | Survival analysis & desain eksperimen (`survival`, `pwr`, `knitr`, `markdown`) |
 
 ---
 
