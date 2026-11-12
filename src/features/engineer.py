@@ -27,6 +27,37 @@ CHURN_WINDOW_DAYS = 90
 TOP_N_CATEGORIES = 10
 
 
+# Kolom yang nilainya per ORDER. Di master DataFrame (grain = item) nilai ini
+# berulang di setiap baris item, jadi harus di-dedup per order sebelum diagregasi.
+ORDER_LEVEL_COLS = [
+    "customer_unique_id",
+    "order_id",
+    "order_purchase_timestamp",
+    "payment_value",
+    "payment_installments",
+    "payment_type",
+    "review_score",
+]
+
+
+def _mode_or_unknown(x: pd.Series) -> str:
+    m = x.mode()
+    return m.iloc[0] if not m.empty else "unknown"
+
+
+def order_level(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Satu baris per order.
+
+    master.csv punya grain item (order dengan 3 item = 3 baris), sementara
+    payment_value, payment_installments, payment_type, dan review_score sudah
+    diagregasi per order di load.py. Tanpa dedup, sum/count atas kolom-kolom ini
+    menghitung order multi-item berkali-kali.
+    """
+    cols = [c for c in ORDER_LEVEL_COLS if c in df.columns]
+    return df[cols].drop_duplicates(subset="order_id")
+
+
 # ---------------------------------------------------------------------------
 # 1. Churn labeling
 # ---------------------------------------------------------------------------
@@ -45,7 +76,7 @@ def label_churn(df: pd.DataFrame, churn_window_days: int = CHURN_WINDOW_DAYS) ->
     logger.info("Reference date: %s", reference_date)
 
     rfm = (
-        df.groupby("customer_unique_id")
+        order_level(df).groupby("customer_unique_id")
         .agg(
             last_order_date=("order_purchase_timestamp", "max"),
             frequency=("order_id", "nunique"),
@@ -79,12 +110,15 @@ def build_features(
 
     Steps:
         1. Log-transform RFM (skewed distributions)
-        2. Agregasi ke level customer
+        2. Agregasi ke level customer (kolom order-level di-dedup per order dulu)
         3. Derived features (business-meaningful)
         4. Merge RFM + aggregasi
         5. Encoding (OHE)
-        6. Median imputation missing values
-        7. Drop leaky features
+        6. Drop leaky features
+
+    Missing values TIDAK diimputasi di sini: imputasi median dilakukan oleh
+    SimpleImputer di dalam model pipeline, yang di-fit hanya pada data train.
+    Imputasi di sini (atas seluruh dataset) membocorkan statistik test set.
     """
     # -- Step 1: Log-transform RFM --
     rfm = rfm.copy()
@@ -93,42 +127,42 @@ def build_features(
     rfm["log_frequency"] = np.log1p(rfm["frequency"])
 
     # -- Step 2: Customer-level aggregation --
-    customer_agg = (
-        df.groupby("customer_unique_id")
+    # 2a. Kolom order-level: payment & review (dedup per order)
+    order_agg = (
+        order_level(df).groupby("customer_unique_id")
         .agg(
-            # Pembayaran
             avg_payment_value=("payment_value", "mean"),
             total_payment_value=("payment_value", "sum"),
             avg_installments=("payment_installments", "mean"),
             max_installments=("payment_installments", "max"),
-            # Harga & ongkir
-            avg_price=("price", "mean"),
-            total_price=("price", "sum"),
-            avg_freight=("freight_value", "mean"),
-            # Review
             avg_review_score=("review_score", "mean"),
             min_review_score=("review_score", "min"),
             review_count=("review_score", "count"),
-            # Order behaviour
-            total_items=("order_item_id", "sum"),
             total_orders=("order_id", "nunique"),
-            # Lokasi
-            customer_state=("customer_state", "first"),
-            # Dominan
-            dominant_payment_type=(
-                "payment_type",
-                lambda x: x.mode()[0] if not x.mode().empty else "unknown",
-            ),
-            dominant_category=(
-                "product_category_name_english",
-                lambda x: x.mode()[0] if not x.mode().empty else "unknown",
-            ),
-            # Temporal
+            dominant_payment_type=("payment_type", _mode_or_unknown),
             first_order_date=("order_purchase_timestamp", "min"),
             last_order_date=("order_purchase_timestamp", "max"),
         )
         .reset_index()
     )
+
+    # 2b. Kolom item-level: harga, ongkir, jumlah item, kategori
+    item_agg = (
+        df.groupby("customer_unique_id")
+        .agg(
+            avg_price=("price", "mean"),
+            total_price=("price", "sum"),
+            avg_freight=("freight_value", "mean"),
+            # order_item_id adalah nomor urut item dalam order (1, 2, 3, ...),
+            # jadi jumlah item = count, bukan sum.
+            total_items=("order_item_id", "count"),
+            customer_state=("customer_state", "first"),
+            dominant_category=("product_category_name_english", _mode_or_unknown),
+        )
+        .reset_index()
+    )
+
+    customer_agg = order_agg.merge(item_agg, on="customer_unique_id", how="left")
 
     # -- Step 3: Derived features --
     customer_agg["customer_lifetime_days"] = (
@@ -176,13 +210,7 @@ def build_features(
         dtype=int,
     )
 
-    # -- Step 6: Median imputation --
-    num_cols = features.select_dtypes(include="number").columns.tolist()
-    for col in num_cols:
-        if features[col].isnull().any():
-            features[col] = features[col].fillna(features[col].median())
-
-    # -- Step 7: Drop leaky features --
+    # -- Step 6: Drop leaky features --
     cols_to_drop = [c for c in LEAKY_FEATURES if c in features.columns]
     features = features.drop(columns=cols_to_drop)
     logger.info("Dropped leaky features: %s", cols_to_drop)

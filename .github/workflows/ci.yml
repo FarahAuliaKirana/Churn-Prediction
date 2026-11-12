@@ -27,7 +27,7 @@ jobs:
 
       - name: Lint with ruff
         run: |
-          ruff check src/ tests/ train_pipeline.py streamlit_app.py
+          ruff check src/ tests/ train_pipeline.py train_snapshot_pipeline.py streamlit_app.py
 
       - name: Run tests with coverage
         run: |

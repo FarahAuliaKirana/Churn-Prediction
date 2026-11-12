@@ -151,7 +151,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Olist Churn Prediction API",
     description=(
-        "Prediksi customer churn menggunakan XGBoost (ROC-AUC 0.8365). "
+        "Prediksi customer churn menggunakan XGBoost. Metrik evaluasi & threshold "
+        "aktif ada di `outputs/metrics.json` (threshold juga di `/health`). "
         "Champion model dari portfolio project AI Engineer.\n\n"
         f"**Rate limit:** `/predict/batch` dibatasi `{BATCH_RATE_LIMIT}` req/menit per IP "
         "(override via env var `BATCH_RATE_LIMIT`).\n\n"

@@ -27,7 +27,7 @@ httpx2>=0.1.0         # untuk FastAPI TestClient
 
 # Dev tools (opsional tapi direkomendasikan)
 black>=23.0.0
-ruff>=0.1.0
+ruff==0.15.17          # dikunci: versi baru ruff menambah aturan default dan membuat CI tiba-tiba merah
 mypy>=1.5.0
 
 # Notebooks 

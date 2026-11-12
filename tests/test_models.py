@@ -4,6 +4,7 @@ Unit tests untuk src/models/evaluate.py dan src/models/train.py.
 """
 import numpy as np
 import pandas as pd
+import pytest
 from unittest.mock import MagicMock, patch
 from sklearn.pipeline import Pipeline
 
@@ -13,10 +14,6 @@ from sklearn.pipeline import Pipeline
 # ---------------------------------------------------------------------------
 
 class TestFindOptimalThreshold:
-    """Tests untuk find_optimal_threshold()."""
-
-    from src.models.evaluate import find_optimal_threshold, DEFAULT_THRESHOLD
-
     def test_returns_float(self):
         from src.models.evaluate import find_optimal_threshold
         y_true = pd.Series([0, 0, 1, 1, 0, 1])
@@ -33,14 +30,10 @@ class TestFindOptimalThreshold:
         assert 0.0 <= thresh <= 1.0
 
     def test_falls_back_to_default_when_recall_unachievable(self):
-        """Jika recall constraint tidak bisa dipenuhi, harus return DEFAULT_THRESHOLD."""
+        """Jika tidak ada threshold yang memenuhi constraint, harus tidak crash."""
         from src.models.evaluate import find_optimal_threshold
-        # Semua prediksi sangat buruk — recall 99% tidak mungkin tanpa threshold 0
         y_true = pd.Series([1, 1, 1, 1, 1])
         y_proba = np.array([0.01, 0.02, 0.03, 0.04, 0.05])
-        # Dengan min_churn_recall=0.99 dan proba sangat rendah,
-        # threshold yang memenuhi recall juga punya recall 100% — harus ada match
-        # Test ini verifikasi fungsi tidak crash
         result = find_optimal_threshold(y_true, y_proba, min_churn_recall=0.99)
         assert isinstance(result, float)
 
@@ -48,8 +41,7 @@ class TestFindOptimalThreshold:
         """Threshold yang dipilih harus menghasilkan recall >= min_churn_recall."""
         from src.models.evaluate import find_optimal_threshold
         rng = np.random.default_rng(0)
-        # Buat data di mana model cukup baik
-        y_true = pd.Series([0]*80 + [1]*20)
+        y_true = pd.Series([0] * 80 + [1] * 20)
         y_proba = np.concatenate([rng.uniform(0, 0.4, 80), rng.uniform(0.6, 1.0, 20)])
 
         thresh = find_optimal_threshold(y_true, y_proba, min_churn_recall=0.80)
@@ -61,8 +53,6 @@ class TestFindOptimalThreshold:
 
 
 class TestComputeShapValues:
-    """Tests untuk compute_shap_values() — mock shap agar tidak butuh model nyata."""
-
     def test_returns_tuple_of_array_and_dataframe(self):
         from src.models.evaluate import compute_shap_values
 
@@ -74,7 +64,6 @@ class TestComputeShapValues:
         mock_pipeline.named_steps = {"model": mock_model}
         mock_pipeline.steps = [("imputer", MagicMock()), ("model", mock_model)]
 
-        # Mock preprocessing transform
         mock_preprocessing = MagicMock(spec=Pipeline)
         mock_preprocessing.transform.return_value = X.values
 
@@ -114,8 +103,6 @@ class TestComputeShapValues:
 
 
 class TestTopShapFeatures:
-    """Tests untuk top_shap_features()."""
-
     def test_returns_dataframe_with_correct_columns(self):
         from src.models.evaluate import top_shap_features
         shap_vals = np.array([[0.5, 0.1, 0.3], [0.2, 0.4, 0.1]])
@@ -164,12 +151,12 @@ class TestBuildPipeline:
 class TestSaveLoadModel:
     def test_save_and_load_roundtrip(self, tmp_path):
         from src.models.train import save_model, load_model, build_pipeline
-        import numpy as np
 
         pipe = build_pipeline()
-        # Fit dengan data minimal
-        X = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0, 5.0] * 20,
-                           "b": [0.5, 1.5, 2.5, 3.5, 4.5] * 20})
+        X = pd.DataFrame({
+            "a": [1.0, 2.0, 3.0, 4.0, 5.0] * 20,
+            "b": [0.5, 1.5, 2.5, 3.5, 4.5] * 20,
+        })
         y = pd.Series([0, 1, 0, 1, 0] * 20)
         pipe.fit(X, y)
 
@@ -178,7 +165,6 @@ class TestSaveLoadModel:
         loaded = load_model(model_path)
 
         assert isinstance(loaded, Pipeline)
-        # Prediksi harus sama
         preds_orig = pipe.predict_proba(X)
         preds_load = loaded.predict_proba(X)
         np.testing.assert_array_almost_equal(preds_orig, preds_load)
@@ -197,6 +183,13 @@ class TestSaveLoadModel:
 
 
 class TestEvaluateAgainstBaseline:
+    """
+    Mock joblib.load langsung — paling reliable karena evaluate_against_baseline
+    memanggil joblib.load(baseline_path) lalu .predict_proba() pada hasilnya.
+    Patch di class Pipeline tidak reliable karena instance yang di-load adalah
+    objek nyata yang sudah ada sebelum patch diterapkan.
+    """
+
     def test_returns_true_when_no_baseline_exists(self, tmp_path):
         from src.models.train import evaluate_against_baseline
         X = pd.DataFrame({"a": [1.0, 2.0]})
@@ -210,41 +203,139 @@ class TestEvaluateAgainstBaseline:
         assert result is True
 
     def test_returns_true_when_new_model_better(self, tmp_path):
+        """Baseline AUC di-mock = 0.5 (proba konstan), new_auc = 0.95 → harus True."""
         from src.models.train import evaluate_against_baseline, save_model, build_pipeline
 
-        # Buat baseline model yang jelek
+        # Buat file baseline agar path.exists() = True
         pipe = build_pipeline()
-        X = pd.DataFrame({"a": np.random.rand(100), "b": np.random.rand(100)})
-        y = pd.Series(np.random.randint(0, 2, 100))
+        rng = np.random.default_rng(42)
+        a = rng.uniform(0, 1, 100)
+        X = pd.DataFrame({"a": a, "b": rng.uniform(0, 1, 100)})
+        y = pd.Series((a > 0.5).astype(int))
         pipe.fit(X, y)
         baseline_path = tmp_path / "baseline.pkl"
         save_model(pipe, baseline_path)
 
-        # new_auc sangat tinggi — harus True
-        result = evaluate_against_baseline(
-            new_auc=0.999,
-            baseline_model_path=baseline_path,
-            X_test=X,
-            y_test=y,
-        )
+        # joblib.load di-mock → return mock dengan predict_proba AUC = 0.5
+        mock_baseline = MagicMock()
+        mock_baseline.predict_proba.return_value = np.column_stack([
+            np.full(len(X), 0.5),
+            np.full(len(X), 0.5),
+        ])
+
+        with patch("src.models.train.joblib.load", return_value=mock_baseline):
+            result = evaluate_against_baseline(
+                new_auc=0.95,
+                baseline_model_path=baseline_path,
+                X_test=X,
+                y_test=y,
+            )
         assert result is True
 
     def test_returns_false_when_improvement_below_min(self, tmp_path):
+        """Baseline AUC di-mock = 1.0 (sempurna), new_auc = 0.001 → harus False."""
         from src.models.train import evaluate_against_baseline, save_model, build_pipeline
 
         pipe = build_pipeline()
-        X = pd.DataFrame({"a": np.random.rand(100), "b": np.random.rand(100)})
-        y = pd.Series(np.random.randint(0, 2, 100))
+        rng = np.random.default_rng(0)
+        a = rng.uniform(0, 1, 100)
+        X = pd.DataFrame({"a": a, "b": rng.uniform(0, 1, 100)})
+        y = pd.Series((a > 0.5).astype(int))
         pipe.fit(X, y)
         baseline_path = tmp_path / "baseline.pkl"
         save_model(pipe, baseline_path)
 
-        # new_auc sangat rendah — pasti False
-        result = evaluate_against_baseline(
-            new_auc=0.001,
-            baseline_model_path=baseline_path,
-            X_test=X,
-            y_test=y,
-            min_improvement=0.001,
-        )
+        # joblib.load di-mock → baseline predict_proba = label sempurna (AUC = 1.0)
+        mock_baseline = MagicMock()
+        perfect = y.values.astype(float)
+        mock_baseline.predict_proba.return_value = np.column_stack([
+            1 - perfect,
+            perfect,
+        ])
+
+        with patch("src.models.train.joblib.load", return_value=mock_baseline):
+            result = evaluate_against_baseline(
+                new_auc=0.001,
+                baseline_model_path=baseline_path,
+                X_test=X,
+                y_test=y,
+                min_improvement=0.001,
+            )
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: threshold & ranking reports, class weighting (v1.3.0)
+# ---------------------------------------------------------------------------
+
+class TestThresholdSelection:
+    def test_majority_positive_does_not_flag_everyone(self):
+        """
+        Regresi: dulu F1 kelas churn + recall >= 0.99 memilih threshold yang
+        menandai hampir semua customer. Youden's J harus memisahkan kelas.
+        """
+        from src.models.evaluate import find_optimal_threshold
+        rng = np.random.default_rng(1)
+        y = np.array([1] * 900 + [0] * 100)
+        proba = np.concatenate([rng.uniform(0.4, 1.0, 900), rng.uniform(0.0, 0.6, 100)])
+        thresh = find_optimal_threshold(y, proba)
+        flagged = (proba >= thresh).mean()
+        assert flagged < 0.95
+
+    def test_single_class_returns_default(self):
+        from src.models.evaluate import DEFAULT_THRESHOLD, find_optimal_threshold
+        assert find_optimal_threshold(np.ones(10), np.linspace(0, 1, 10)) == DEFAULT_THRESHOLD
+
+
+class TestThresholdReport:
+    def test_confusion_counts_and_baseline(self):
+        from src.models.evaluate import threshold_report
+        y = np.array([1, 1, 1, 0])
+        proba = np.array([0.9, 0.8, 0.2, 0.1])
+        rep = threshold_report(y, proba, threshold=0.5)
+        assert (rep["tp"], rep["fn"], rep["fp"], rep["tn"]) == (2, 1, 0, 1)
+        assert rep["churn_precision"] == 1.0
+        assert rep["non_churn_recall"] == 1.0
+        assert rep["baseline_all_churn_precision"] == 0.75
+        assert rep["churn_precision_lift"] == pytest.approx(1 / 0.75, abs=1e-3)
+
+
+class TestRankingReport:
+    def test_perfect_ranking_reaches_max_lift(self):
+        from src.models.evaluate import ranking_report
+        y = np.array([1] * 90 + [0] * 10)
+        proba = np.concatenate([np.linspace(1.0, 0.5, 90), np.linspace(0.4, 0.0, 10)])
+        rep = ranking_report(y, proba, top_frac=0.1)
+        assert rep["top_decile_churn_rate"] == 1.0
+        assert rep["top_decile_churn_lift"] == rep["max_possible_churn_lift"]
+        assert rep["bottom_decile_return_rate"] == 1.0
+        assert rep["bottom_decile_return_lift"] == pytest.approx(10.0)
+
+
+class TestClassWeighting:
+    def test_scale_pos_weight_is_neg_over_pos(self):
+        from src.models.train import compute_scale_pos_weight
+        y = pd.Series([1] * 90 + [0] * 10)
+        assert compute_scale_pos_weight(y) == pytest.approx(10 / 90)
+
+    def test_default_pipeline_has_no_reweighting(self):
+        from src.models.train import build_pipeline
+        model = build_pipeline().named_steps["model"]
+        assert model.get_params()["scale_pos_weight"] == 1.0
+
+
+class TestTrainSplits:
+    def test_threshold_from_val_and_metrics_keys(self):
+        from src.models.train import train
+        rng = np.random.default_rng(0)
+        n = 600
+        a = rng.uniform(0, 1, n)
+        X = pd.DataFrame({"monetary": a * 100, "avg_freight": rng.uniform(0, 50, n)})
+        y = pd.Series((a + rng.normal(0, 0.3, n) > 0.2).astype(int))
+        _, metrics = train(X, y, n_cv_folds=3)
+
+        assert metrics["n_train"] + metrics["n_val"] + metrics["n_test"] == n
+        assert metrics["threshold_method"] == "youden_j_on_validation"
+        for key in ["test_threshold_report", "test_ranking_report", "feature_means_train"]:
+            assert key in metrics
+        assert set(metrics["feature_means_train"]) == {"monetary", "avg_freight"}

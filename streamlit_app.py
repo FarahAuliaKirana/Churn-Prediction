@@ -216,7 +216,8 @@ if page == "🔍 Prediksi Single":
                     <div class="metric-sub">Threshold {resp['threshold_used']}</div>
                 </div>""", unsafe_allow_html=True)
             with col_b:
-                prob_class = "danger" if prob > 0.7 else "warning" if prob > 0.47 else "success"
+                thr = resp["threshold_used"]
+                prob_class = "danger" if prob >= thr else "warning" if prob >= thr - 0.1 else "success"
                 st.markdown(f"""
                 <div class="metric-card {prob_class}">
                     <div class="metric-label">Churn Probability</div>
@@ -228,7 +229,7 @@ if page == "🔍 Prediksi Single":
                 <div class="metric-card">
                     <div class="metric-label">Customer ID</div>
                     <div class="metric-value" style="font-size:1.2rem">{resp.get('customer_id') or '—'}</div>
-                    <div class="metric-sub">XGBoost ROC-AUC 0.8365</div>
+                    <div class="metric-sub">XGBoost</div>
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("##### Churn Probability")
