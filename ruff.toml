@@ -1,0 +1,9 @@
+# Konfigurasi ruff eksplisit.
+# Aturan ditulis langsung di sini (bukan mengandalkan default ruff), supaya hasil
+# lint sama di laptop dan di CI walaupun versi ruff berbeda.
+target-version = "py311"
+line-length = 100
+
+[lint]
+# Pyflakes (F) + subset pycodestyle (E4, E7, E9) — set default ruff 0.15.
+select = ["E4", "E7", "E9", "F"]
