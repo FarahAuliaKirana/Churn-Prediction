@@ -11,10 +11,10 @@ Proyek ini punya dua versi model:
 | | **v1 — Churn (desain lama)** | **v2 — Repeat purchase (snapshot)** |
 |---|---|---|
 | Pertanyaan | Apakah order terakhir > 90 hari sebelum akhir dataset? | Apakah customer order lagi dalam 90 hari setelah tanggal T? |
-| Validasi | Random split 60/20/20 | Out-of-time: train 2017 → test Jun 2018 |
-| ROC-AUC | 0.8207 | 0.619 (XGBoost) / 0.602 (RFM LogReg) |
-| Lift | — (didominasi informasi waktu) | ~7× di top 1%, 2.5× di top 10% |
-| Status | ⚠️ Sinyal didominasi periode pembelian (uji placebo) | ✅ Signifikan mengalahkan aturan "recency saja" |
+| Validasi | Random split 60/20/20 | Out-of-time + backtest 3 periode (Des 2017, Mar 2018, Jun 2018) |
+| ROC-AUC | 0.8207 | 0.592 rata-rata backtest (RFM LogReg) |
+| Lift | — (didominasi informasi waktu) | RFM LogReg: 6.1–6.7× di top 1%, ~2× di top 10% |
+| Status | ⚠️ Sinyal didominasi periode pembelian (uji placebo) | ✅ Signifikan mengalahkan aturan "recency saja" di 3/3 periode |
 | Dipakai API | Ya | Belum (perlu skema request baru) |
 
 ### v2 — Repeat Purchase (Snapshot) · `train_snapshot_pipeline.py` · NB06
@@ -28,8 +28,24 @@ Sumber: `outputs/metrics_snapshot.json`. Test snapshot 1 Juni 2018: 77,808 custo
 | **XGBoost** | **0.619** | **0.0192** | **3.86%** | **6.82×** | **2.55×** |
 
 - XGBoost vs recency rule: selisih PR-AUC **+0.011, CI 95% [0.004, 0.022]** — model menangkap sinyal di luar timing
-- XGBoost vs RFM LogReg: +0.0005, CI 95% [−0.005, 0.005] — tidak signifikan → **RFM LogReg direkomendasikan** sebagai model produksi pertama karena lebih sederhana dan interpretable
+- XGBoost vs RFM LogReg: +0.0005, CI 95% [−0.005, 0.005] — tidak signifikan
 - Sinyal utama: pernah order > 1 kali (repeat rate 3.4× base), recency yang baru, review tinggi. Ongkir berpengaruh kecil
+
+#### Backtesting — 3 periode test (expanding window)
+
+Sumber: `outputs/backtest_snapshot.csv` (`python train_snapshot_pipeline.py --backtest`). Setiap fold mengulang pemilihan hyperparameter, refit, dan evaluasi hanya dengan data sebelum periode test-nya.
+
+| Test snapshot | Repeater | Recency rule (PR-AUC · lift top 1%) | RFM LogReg | XGBoost |
+|---|---|---|---|---|
+| Des 2017 | 312 | 0.0102 · 2.25× | **0.0179 · 6.10×** | 0.0158 · 4.81× |
+| Mar 2018 | 403 | 0.0098 · 1.74× | **0.0249 · 6.70×** | 0.0207 · 5.96× |
+| Jun 2018 | 440 | 0.0080 · 1.36× | 0.0188 · 6.36× | **0.0192 · 6.82×** |
+| **Rata-rata** | | 1.78× | **6.39×** (PR-AUC 3.0× base rate) | 5.86× (PR-AUC 2.8× base rate) |
+
+- XGBoost signifikan mengalahkan recency rule di **3/3** periode → sinyal di luar timing stabil
+- XGBoost **tidak pernah** signifikan lebih baik dari RFM LogReg; LogReg lebih tinggi di 2/3 periode dan lebih stabil (lift top 1% 6.1–6.7× vs 4.8–6.8×)
+- Jun 2018 ternyata periode terbaik XGBoost — hanya melihat satu test snapshot akan melebih-lebihkan keunggulannya
+- **RFM Logistic Regression direkomendasikan** sebagai model produksi: setara atau lebih baik dari XGBoost di semua periode, lebih stabil, dan interpretable
 
 ### v1 — Churn (desain lama) · `train_pipeline.py` · NB02–NB04
 
@@ -87,7 +103,8 @@ olist-churn-prediction/
 │   └── models/
 │       ├── train.py                  # v1: XGBoost training pipeline
 │       ├── evaluate.py               # v1: SHAP, threshold tuning, lift
-│       └── snapshot_model.py         # v2: XGBoost + baseline, metrik ranking, bootstrap
+│       ├── snapshot_model.py         # v2: XGBoost + baseline, metrik ranking, bootstrap
+│       └── backtest.py               # v2: backtest expanding window di 3 periode test
 │
 ├── data/
 │   ├── raw/                          # CSV mentah dari Kaggle (tidak di-push)
@@ -143,6 +160,8 @@ python train_snapshot_pipeline.py --raw-path data/raw --output-dir outputs
 ```
 
 Output: `outputs/model_snapshot_rfm_logreg.pkl`, `outputs/model_snapshot_xgboost.pkl`, `outputs/metrics_snapshot.json`.
+
+Tambahkan `--backtest` untuk menjalankan backtest 3 periode (sekitar 5–10 menit), yang menghasilkan `outputs/backtest_snapshot.csv` dan `outputs/backtest_snapshot_significance.csv`.
 
 ### 4. Jalankan API
 
@@ -371,7 +390,7 @@ Skenario ukuran dampak (gross, 1 order tambahan per customer yang kembali, rata-
 - **Random split:** Metodologi yang lebih ketat untuk time-series adalah temporal split (train 2016–2017, test 2018) — dipertahankan di sini untuk menjaga jumlah sampel
 - **One-time buyer dominance:** 96.9% customer hanya order 1 kali — model ini paling relevan untuk customer dengan riwayat ≥ 1 order
 - **v1 — Label = tanggal order terakhir (kritis):** uji placebo di NB04 membuktikan fitur yang berubah seiring waktu (ongkir, metode bayar, kategori) menjadi proksi tanggal order. Sudah diatasi dengan desain snapshot di v2
-- **v2 — Sinyal lemah & sampel positif kecil:** hanya 440–618 repeater per bagian, sehingga CI bootstrap masih lebar. Baru dievaluasi di satu test snapshot; backtesting di beberapa periode adalah langkah berikutnya
+- **v2 — Sinyal lemah & sampel positif kecil:** hanya 312–618 repeater per bagian, sehingga CI bootstrap masih lebar. Backtest dibatasi 3 periode karena panjang data (order praktis berhenti akhir Agustus 2018)
 - **v2 — Bukan model uplift:** model memprediksi siapa yang kembali secara alami, bukan siapa yang terpengaruh kampanye. Alokasi voucher sebaiknya didasarkan pada A/B test + uplift modeling
 - **API masih v1:** migrasi ke model v2 membutuhkan skema request baru (`recency_days`, `tenure_days`, dll.)
 
@@ -381,9 +400,11 @@ Skenario ukuran dampak (gross, 1 order tambahan per customer yang kembali, rata-
 
 **Sumber:** [Olist Brazilian E-Commerce Public Dataset](https://www.kaggle.com/olistbr/brazilian-ecommerce)  
 **Lisensi:** CC BY-NC-SA 4.0  
-**Periode:** September 2016 – Oktober 2018  
+**Periode data:** September 2016 – Oktober 2018 (transaksi praktis berhenti akhir Agustus 2018)  
 **Ukuran:** ~100K orders, 96K unique customers
+
+> Dataset ini adalah data historis yang dirilis publik oleh Olist dan tidak diperbarui lagi. Tahun 2016–2018 adalah periode transaksi di dalam data, bukan waktu proyek dikerjakan.
 
 ---
 
-*Farah Aulia Kirana — Churn Prediction Portfolio Project*
+*Farah Aulia Kirana — Churn Prediction Portfolio Project · dikerjakan 2026*

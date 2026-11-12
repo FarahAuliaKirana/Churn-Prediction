@@ -3,6 +3,7 @@ train_snapshot_pipeline.py — Training model repeat purchase berbasis snapshot.
 
 Usage:
     python train_snapshot_pipeline.py --raw-path data/raw --output-dir outputs
+    python train_snapshot_pipeline.py --backtest          # + backtest 3 periode test
 
 Desain (lihat src/features/snapshot.py):
     train      : snapshot 2017-06-01, 2017-09-01, 2017-12-01
@@ -10,10 +11,15 @@ Desain (lihat src/features/snapshot.py):
     test       : snapshot 2018-06-01   (out-of-time; label window s/d 2018-08-30,
                                          data order praktis berhenti akhir Agustus 2018)
 
+Backtest (lihat src/models/backtest.py): prosedur yang sama diulang dengan test
+snapshot 2017-12, 2018-03, dan 2018-06 (expanding window).
+
 Output:
-    outputs/model_snapshot_xgb.pkl
+    outputs/model_snapshot_xgboost.pkl
     outputs/model_snapshot_rfm_logreg.pkl
     outputs/metrics_snapshot.json
+    outputs/backtest_snapshot.csv               (dengan --backtest)
+    outputs/backtest_snapshot_significance.csv  (dengan --backtest)
 """
 from __future__ import annotations
 
@@ -29,6 +35,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.data.load import build_master  # noqa: E402
 from src.features.snapshot import build_snapshots, load_reviews  # noqa: E402
+from src.models.backtest import (  # noqa: E402
+    QUARTERLY_CUTOFFS,
+    build_snapshot_cache,
+    make_folds,
+    run_backtest,
+    summarize_backtest,
+)
 from src.models.snapshot_model import train_and_evaluate  # noqa: E402
 
 TRAIN_CUTOFFS = ["2017-06-01", "2017-09-01", "2017-12-01"]
@@ -48,6 +61,8 @@ def main() -> None:
     parser.add_argument("--raw-path", default="data/raw")
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--n-boot", type=int, default=500)
+    parser.add_argument("--backtest", action="store_true",
+                        help="Jalankan juga backtest di beberapa periode test")
     args = parser.parse_args()
 
     out = Path(args.output_dir)
@@ -66,8 +81,15 @@ def main() -> None:
         joblib.dump(model, out / f"model_snapshot_{name}.pkl")
     with open(out / "metrics_snapshot.json", "w") as f:
         json.dump(metrics, f, indent=2)
-
     logger.info("Disimpan: %s", [f"model_snapshot_{n}.pkl" for n in models] + ["metrics_snapshot.json"])
+
+    if args.backtest:
+        snapshots = build_snapshot_cache(master, QUARTERLY_CUTOFFS, reviews=reviews)
+        fold_metrics, significance = run_backtest(snapshots, make_folds(), n_boot=args.n_boot)
+        fold_metrics.to_csv(out / "backtest_snapshot.csv", index=False)
+        significance.to_csv(out / "backtest_snapshot_significance.csv", index=False)
+        logger.info("Ringkasan backtest:\n%s", summarize_backtest(fold_metrics).to_string())
+        logger.info("Disimpan: backtest_snapshot.csv, backtest_snapshot_significance.csv")
 
 
 if __name__ == "__main__":

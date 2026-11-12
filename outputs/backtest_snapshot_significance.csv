@@ -1,0 +1,7 @@
+fold,test_snapshot,comparison,diff,ci_low,ci_high,p_value_one_sided,n_boot,significant
+1,2017-12-01,xgboost_vs_recency_rule_pr_auc,0.0056,0.0018,0.016,0.002,500,True
+1,2017-12-01,xgboost_vs_rfm_logreg_pr_auc,-0.0021,-0.0088,0.0021,0.828,500,False
+2,2018-03-01,xgboost_vs_recency_rule_pr_auc,0.0109,0.0035,0.0243,0.0,500,True
+2,2018-03-01,xgboost_vs_rfm_logreg_pr_auc,-0.0042,-0.0139,0.0026,0.896,500,False
+3,2018-06-01,xgboost_vs_recency_rule_pr_auc,0.0112,0.0044,0.0222,0.0,500,True
+3,2018-06-01,xgboost_vs_rfm_logreg_pr_auc,0.0005,-0.005,0.0046,0.462,500,False
