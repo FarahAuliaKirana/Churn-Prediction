@@ -6,7 +6,7 @@
 # Core ML
 pandas>=1.5.0
 numpy>=1.23.0
-scikit-learn>=1.8.0
+scikit-learn==1.9.0      # dikunci: model .pkl yang di-commit hanya aman dimuat di versi yang sama
 xgboost>=1.7.0
 shap>=0.41.0
 joblib>=1.2.0

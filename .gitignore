@@ -8,6 +8,8 @@ outputs/*.pkl
 outputs/*.joblib
 models/*.pkl
 models/*.joblib
+# Kecuali model v2 (4 KB): dibutuhkan dashboard di Streamlit Community Cloud
+!outputs/model_snapshot_rfm_logreg.pkl
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
@@ -41,3 +43,5 @@ htmlcov/
 Thumbs.db
 
 repomix-output.xml
+# Folder build container demo (berisi model .pkl)
+build/

@@ -53,10 +53,10 @@ from src.api.schemas import (
     RepeatRequest,
     RepeatResponse,
 )
-from src.features.snapshot import CATEGORICAL_FEATURES, NUMERIC_FEATURES
 from src.models.evaluate import DEFAULT_THRESHOLD
 from src.models.train import load_model
 from src.monitoring.drift import DriftMonitor
+from src.serving import repeat as repeat_serving
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +73,8 @@ MODEL_VERSION     = os.getenv("MODEL_VERSION",     "1.0.0")
 # model paling stabil di backtest 3 periode (lihat NB06).
 REPEAT_MODEL_PATH    = os.getenv("REPEAT_MODEL_PATH",    "outputs/model_snapshot_rfm_logreg.pkl")
 REPEAT_METRICS_PATH  = os.getenv("REPEAT_METRICS_PATH",  "outputs/metrics_snapshot.json")
-REPEAT_MODEL_NAME    = os.getenv("REPEAT_MODEL_NAME",    "rfm_logreg")
-REPEAT_MODEL_VERSION = os.getenv("REPEAT_MODEL_VERSION", "2.0.0-rfm-logreg")
+REPEAT_MODEL_NAME    = os.getenv("REPEAT_MODEL_NAME",    repeat_serving.MODEL_NAME)
+REPEAT_MODEL_VERSION = os.getenv("REPEAT_MODEL_VERSION", repeat_serving.MODEL_VERSION)
 
 # CORS: default aman (Streamlit local saja).
 # Untuk deploy ke Streamlit Cloud / HuggingFace Spaces:
@@ -136,10 +136,8 @@ def _load_repeat_model() -> None:
 
     metrics_path = Path(REPEAT_METRICS_PATH)
     if metrics_path.exists():
-        with open(metrics_path) as f:
-            segments = json.load(f).get("segments", {}).get(REPEAT_MODEL_NAME, [])
-        # Urutkan dari batas skor tertinggi (segmen tersempit) ke terendah
-        _repeat_segments = sorted(segments, key=lambda s: s["min_score"], reverse=True)
+        # Urut dari batas skor tertinggi (segmen tersempit) ke terendah
+        _repeat_segments = repeat_serving.load_segments(metrics_path, REPEAT_MODEL_NAME)
         logger.info("Repeat segments loaded: %s", [s["segment"] for s in _repeat_segments])
     else:
         _repeat_segments = []
@@ -280,42 +278,20 @@ def _predict_one(req: ChurnRequest) -> ChurnResponse:
     return result
 
 
+# Logika scoring v2 ada di src/serving/repeat.py, dipakai bersama dengan dashboard.
+
 def _repeat_requests_to_dataframe(reqs: list[RepeatRequest]) -> pd.DataFrame:
-    """
-    Susun input untuk pipeline v2. Pipeline di-fit dengan semua kolom snapshot,
-    jadi kolom yang tidak dipakai RFM LogReg diisi NaN / 'unknown'.
-    """
-    df = pd.DataFrame([r.model_dump(exclude={"customer_id"}) for r in reqs])
-    for col in NUMERIC_FEATURES:
-        if col not in df.columns:
-            df[col] = np.nan
-    for col in CATEGORICAL_FEATURES:
-        df[col] = "unknown"
-    return df[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
+    return repeat_serving.build_frame([r.model_dump() for r in reqs])
 
 
 def _assign_segment(score: float) -> dict:
-    """Segmen tersempit yang batas skornya terlampaui; 'rest' jika tidak ada."""
-    for seg in _repeat_segments:
-        if score >= seg["min_score"]:
-            return seg
-    return {"segment": "rest", "lift": None, "precision": None}
+    return dict(repeat_serving.assign_segment(score, _repeat_segments))
 
 
 def _score_repeat(reqs: list[RepeatRequest]) -> list[RepeatResponse]:
-    probas = _repeat_model.predict_proba(_repeat_requests_to_dataframe(reqs))[:, 1]
-    out = []
-    for req, p in zip(reqs, probas):
-        seg = _assign_segment(float(p))
-        out.append(RepeatResponse(
-            customer_id=req.customer_id,
-            repeat_probability=round(float(p), 6),
-            segment=seg["segment"],
-            segment_lift=seg["lift"],
-            segment_precision=seg["precision"],
-            model_version=REPEAT_MODEL_VERSION,
-        ))
-    return out
+    rows = [r.model_dump() for r in reqs]
+    return [RepeatResponse(**d) for d in
+            repeat_serving.score_rows(_repeat_model, _repeat_segments, rows, REPEAT_MODEL_VERSION)]
 
 
 # ---------------------------------------------------------------------------

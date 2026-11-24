@@ -1,6 +1,6 @@
 # Customer Churn & Repeat-Purchase Prediction — Olist Brazilian E-Commerce
 
-🇬🇧 English version (ringkasan eksekutif): [README.md](README.md)
+🇬🇧 English version (ringkasan eksekutif): [README.md](README.md) · **Demo langsung: [churn-prediction-demo-2026.streamlit.app](https://churn-prediction-demo-2026.streamlit.app/)**
 
 Prediksi customer churn dan repeat purchase menggunakan dataset e-commerce publik Olist (Brazil) dengan pendekatan end-to-end: dari raw data hingga REST API, interpretabilitas berbasis SHAP, validasi out-of-time, dan desain eksperimen di R. Dokumen ini adalah versi lengkap berbahasa Indonesia.
 

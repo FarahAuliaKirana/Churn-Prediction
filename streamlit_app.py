@@ -7,11 +7,13 @@ Halaman:
     Score a customer      — peluang satu customer belanja lagi dalam 90 hari + contoh siap klik
     Score a customer list — data demo (customer asli Jun 2018) atau upload CSV → daftar prioritas
 
-Jalankan lokal (API harus berjalan untuk halaman scoring):
-    uvicorn src.api.main:app --reload
+Jalankan lokal:
+    uvicorn src.api.main:app --reload     # opsional
     streamlit run streamlit_app.py
 
-Target API bisa diganti dengan env var API_URL (default http://127.0.0.1:8000).
+Scoring lewat API kalau API berjalan (env var API_URL, default http://127.0.0.1:8000).
+Kalau API tidak ada (misalnya di Streamlit Community Cloud), dashboard memuat model v2
+sendiri lewat src/serving/repeat.py, modul yang juga dipakai API, jadi hasilnya identik.
 Halaman Overview tidak butuh API: datanya dibaca dari outputs/ dan r/.
 Halaman bisa dibuka langsung lewat URL: ?page=overview | score | list
 """
@@ -26,6 +28,8 @@ import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
+
+from src.serving.repeat import RepeatScorer
 
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000").rstrip("/")
 ROOT = Path(__file__).parent
@@ -129,18 +133,38 @@ def get_health() -> dict | None:
         return None
 
 
+@st.cache_resource
+def get_local_scorer() -> RepeatScorer | None:
+    """Model v2 yang dimuat di dalam dashboard, dipakai saat API tidak tersedia."""
+    fp = ROOT / "outputs" / "model_snapshot_rfm_logreg.pkl"
+    if not fp.exists():
+        return None
+    return RepeatScorer.from_files(fp, ROOT / "outputs" / "metrics_snapshot.json")
+
+
+def scoring_mode() -> str | None:
+    """'api' kalau API siap, 'local' kalau model ada di repo, None kalau keduanya tidak ada."""
+    health = get_health()
+    if health and health.get("repeat_model_loaded"):
+        return "api"
+    return "local" if get_local_scorer() is not None else None
+
+
 def api_offline_message() -> None:
     st.error(
-        f"The scoring API is not reachable at `{API_URL}`. Start it with "
-        "`uvicorn src.api.main:app --reload`, or set `API_URL` to where it runs."
+        f"Scoring is unavailable: the API is not reachable at `{API_URL}` and the model file "
+        "`outputs/model_snapshot_rfm_logreg.pkl` is missing. Run `python train_snapshot_pipeline.py`, "
+        "or start the API with `uvicorn src.api.main:app --reload`."
     )
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def score_batch(customers: tuple[tuple, ...]) -> list[dict]:
-    """Panggil /v2/repeat/score/batch per 1000 baris (input tuple agar bisa di-cache)."""
+def score_batch(customers: tuple[tuple, ...], mode: str) -> list[dict]:
+    """Skor lewat /v2/repeat/score/batch per 1000 baris, atau langsung di dashboard (mode 'local')."""
     rows = [dict(zip(("customer_id", "recency_days", "frequency", "monetary", "tenure_days"), c))
             for c in customers]
+    if mode == "local":
+        return get_local_scorer().score(rows)
     out = []
     for i in range(0, len(rows), 1000):
         r = requests.post(f"{API_URL}/v2/repeat/score/batch",
@@ -191,11 +215,11 @@ with st.sidebar:
     st.query_params["page"] = next(k for k, v in PAGES.items() if v == page)
     st.divider()
     health = get_health()
-    if health and health.get("repeat_model_loaded"):
+    MODE = scoring_mode()
+    if MODE == "api":
         st.caption(f"API connected · model {health.get('repeat_model_version')}")
-    elif health:
-        st.caption("API connected, but the model is not loaded. "
-                   "Run `python train_snapshot_pipeline.py`.")
+    elif MODE == "local":
+        st.caption(f"Scoring in the app · model {get_local_scorer().model_version}")
     else:
         st.caption(f"API offline (`{API_URL}`). The Overview page still works.")
 
@@ -407,19 +431,25 @@ elif page == PAGES["score"]:
         if tenure < recency:
             st.warning("Days since the first order cannot be smaller than days since the last order.")
             st.stop()
-        try:
-            r = requests.post(f"{API_URL}/v2/repeat/score", json=payload, timeout=10)
-        except requests.RequestException:
+        if MODE is None:
             api_offline_message()
             st.stop()
-        if r.status_code == 503:
-            st.error("The API is running but the model is not loaded. "
-                     "Run `python train_snapshot_pipeline.py`, then restart the API.")
-            st.stop()
-        if r.status_code == 422:
-            st.error(f"The API rejected these inputs: {r.json().get('detail')}")
-            st.stop()
-        resp = r.json()
+        if MODE == "local":
+            resp = get_local_scorer().score([payload])[0]
+        else:
+            try:
+                r = requests.post(f"{API_URL}/v2/repeat/score", json=payload, timeout=10)
+            except requests.RequestException:
+                api_offline_message()
+                st.stop()
+            if r.status_code == 503:
+                st.error("The API is running but the model is not loaded. "
+                         "Run `python train_snapshot_pipeline.py`, then restart the API.")
+                st.stop()
+            if r.status_code == 422:
+                st.error(f"The API rejected these inputs: {r.json().get('detail')}")
+                st.stop()
+            resp = r.json()
         p = resp["repeat_probability"]
         times = p / base_rate if base_rate else None
         seg = resp["segment"]
@@ -460,7 +490,7 @@ elif page == PAGES["score"]:
     grid = tuple(("what-if", d, int(frequency), float(monetary),
                   d if frequency == 1 else max(int(tenure), d)) for d in days)
     try:
-        curve = score_batch(grid)
+        curve = score_batch(grid, MODE)
         cdf = pd.DataFrame({"Days since last order": days,
                             "Chance (%)": [c["repeat_probability"] * 100 for c in curve]})
         line = alt.Chart(cdf).mark_line(color=ACCENT, strokeWidth=2.5).encode(
@@ -539,7 +569,10 @@ else:
 
     with st.spinner(f"Scoring {len(df):,} customers…"):
         try:
-            preds = pd.DataFrame(score_batch(to_tuples(df)))
+            if MODE is None:
+                api_offline_message()
+                st.stop()
+            preds = pd.DataFrame(score_batch(to_tuples(df), MODE))
         except requests.HTTPError as e:
             st.error(f"The API rejected the data: {e.response.text[:300]}")
             st.stop()

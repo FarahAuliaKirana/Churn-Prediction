@@ -1,6 +1,7 @@
 # Repeat-Purchase Prediction & Experiment Design — Olist E-Commerce
 
 [![CI](https://github.com/FarahAuliaKirana/Churn-Prediction/actions/workflows/ci.yml/badge.svg)](https://github.com/FarahAuliaKirana/Churn-Prediction/actions/workflows/ci.yml)
+**[Live demo](https://churn-prediction-demo-2026.streamlit.app/)**
 · Python · R · scikit-learn · XGBoost · SHAP · FastAPI · Streamlit · Docker · GitHub Actions
 
 🇮🇩 Versi Bahasa Indonesia (lebih detail): [README.id.md](README.id.md)
@@ -21,7 +22,7 @@ An end-to-end customer analytics project on the public Olist Brazilian e-commerc
 
 ## Dashboard
 
-A Streamlit dashboard (`streamlit run streamlit_app.py`, with the API running) presents the findings and turns the model into a campaign tool.
+A Streamlit dashboard presents the findings and turns the model into a campaign tool. **Try it live: [churn-prediction-demo-2026.streamlit.app](https://churn-prediction-demo-2026.streamlit.app/)** (it may take a minute to wake up). It scores through the API when one is running, and otherwise loads the same model in the app through `src/serving/repeat.py`, the module the API also uses, so both give identical results.
 
 **Overview** — the story, the proof on held-out customers, recommendations, and the evidence behind them:
 
@@ -100,8 +101,9 @@ src/
   models/backtest.py             v2 expanding-window backtest
   api/                           FastAPI service (v2 repeat scoring + legacy v1 churn)
   monitoring/drift.py            Prediction logging & drift checks
+  serving/repeat.py              v2 scoring shared by the API and the dashboard
 streamlit_app.py                 Dashboard: overview, score a customer, score a customer list
-tests/                           179 unit tests (leakage checks, metrics, API v1 & v2)
+tests/                           195 unit tests (leakage checks, metrics, API v1 & v2, API–dashboard parity)
 train_pipeline.py                v1 training CLI
 train_snapshot_pipeline.py       v2 training CLI (--backtest for the 3-period backtest)
 ```
@@ -123,8 +125,8 @@ python train_snapshot_pipeline.py --backtest  # v2 repeat-purchase model + 3-per
 python train_pipeline.py                      # v1 churn model (legacy endpoints)
 Rscript r/render.R                            # experiment design report (needs pwr, knitr, markdown)
 uvicorn src.api.main:app --reload             # API docs at http://localhost:8000/docs
-streamlit run streamlit_app.py                # dashboard (calls the API)
-pytest tests/                                 # 179 tests
+streamlit run streamlit_app.py                # dashboard (uses the API if running)
+pytest tests/                                 # 195 tests
 ```
 
 ### API (v2)
