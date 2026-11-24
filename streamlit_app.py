@@ -80,6 +80,28 @@ st.markdown(f"""
     .note {{ color: {MUTED}; font-size: 0.9rem; }}
     .footer {{ color: {MUTED}; font-size: 0.88rem; border-top: 1px solid #E3E5DE;
                padding-top: 0.8rem; margin-top: 2rem; }}
+    /* Pilihan (segmented control): yang aktif terisi penuh supaya jelas terpilih */
+    button[data-variant="segmented_control"] {{
+        padding: 0.45rem 1rem !important; background: #FFFFFF !important; color: {INK} !important; }}
+    button[data-variant="segmented_control"]:hover {{ color: {ACCENT} !important; }}
+    button[data-variant="segmented_control"][data-selected] {{
+        background: {ACCENT} !important; border-color: {ACCENT} !important; }}
+    button[data-variant="segmented_control"][data-selected],
+    button[data-variant="segmented_control"][data-selected] * {{ color: #FFFFFF !important;
+        font-weight: 600; }}
+    /* Menu samping: gaya navigasi, bukan tombol radio */
+    section[data-testid="stSidebar"] [role="radiogroup"] {{ gap: 0.2rem; align-items: stretch;
+        width: 100%; }}
+    section[data-testid="stSidebar"] [data-testid="stRadioOption"] {{
+        width: 100%; max-width: none; padding: 0.45rem 0.75rem; border-radius: 6px; margin: 0;
+        cursor: pointer; }}
+    section[data-testid="stSidebar"] [data-testid="stRadioOption"] > div >
+        div:not([data-testid="stMarkdownContainer"]) {{ display: none; }}
+    section[data-testid="stSidebar"] [data-testid="stRadioOption"]:hover {{ background: #E3E7DF; }}
+    section[data-testid="stSidebar"] [data-testid="stRadioOption"]:has(input:checked) {{
+        background: {ACCENT}; }}
+    section[data-testid="stSidebar"] [data-testid="stRadioOption"]:has(input:checked) p {{
+        color: #FFFFFF; font-weight: 600; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -211,7 +233,7 @@ with st.sidebar:
     st.markdown("### Olist repeat purchase")
     page = st.radio("Page", list(PAGES.values()),
                     index=list(PAGES).index(slug) if slug in PAGES else 0,
-                    label_visibility="collapsed")
+                    label_visibility="collapsed", width="stretch")
     st.query_params["page"] = next(k for k, v in PAGES.items() if v == page)
     st.divider()
     health = get_health()
@@ -408,8 +430,8 @@ elif page == PAGES["score"]:
         st.session_state["example"] = "Loyal repeat buyer"
         apply_example()
 
-    st.radio("Start from an example", [*EXAMPLES, "Custom"], key="example", horizontal=True,
-             on_change=apply_example)
+    st.segmented_control("Start from an example", [*EXAMPLES, "Custom"], key="example",
+                         required=True, on_change=apply_example)
 
     inputs, result = st.columns([1, 1.35], gap="large")
     with inputs:
@@ -522,12 +544,14 @@ else:
 
     required = ["customer_id", "recency_days", "frequency", "monetary", "tenure_days"]
     demo = load_demo_customers()
-    source = st.radio("Data", ["Real held-out customers (June 2018 sample)", "Upload a CSV"],
-                      horizontal=True, label_visibility="collapsed",
-                      index=0 if demo is not None else 1)
+    sources = {"sample": ":material/table_view: Sample: real June 2018 customers",
+               "upload": ":material/upload_file: Upload your own CSV"}
+    source = st.segmented_control("Choose the data to score", list(sources), format_func=sources.get,
+                                  default="sample" if demo is not None else "upload",
+                                  required=True)
 
     actual = None
-    if source.startswith("Real"):
+    if source == "sample":
         if demo is None:
             st.info("Demo sample not found. Run `python train_snapshot_pipeline.py` to create "
                     "`outputs/demo_customers_2018-06.csv`.")

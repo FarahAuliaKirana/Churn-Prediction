@@ -21,7 +21,7 @@ matplotlib>=3.6.0
 seaborn>=0.12.0
 
 # Dashboard (streamlit_app.py; altair ikut terpasang bersama streamlit)
-streamlit>=1.38.0
+streamlit==1.67.0         # dikunci: segmented_control butuh >= 1.40, dan versi lokal = versi di Streamlit Cloud
 requests>=2.31.0
 
 # Testing
